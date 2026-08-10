@@ -26,7 +26,7 @@ For integer intervals, define adjacent precisely: [1, 2] and [3, 4] are adjacent
 
 Create test_intervals.py using only Python's standard library. Import the function with "from intervals import merge_intervals". Keep this test file minimal: use exactly these cases and no extra cases: unsorted chained intervals [(5, 7), (1, 2), (3, 4)] -> [(1, 7)]; overlapping intervals [(1, 10), (2, 6), (8, 12)] -> [(1, 12)]; adjacent intervals [(1, 2), (3, 4)] -> [(1, 4)]; a one-integer gap [(1, 2), (4, 5)] -> [(1, 2), (4, 5)]; negative intervals [(-10, -8), (-5, -1)] -> [(-10, -8), (-5, -1)]; an empty list -> []; input immutability; and invalid intervals [(2, 1)] raising ValueError. Do not use pytest or any third-party package.
 
-IMPORTANT: use one tool call at a time. First write intervals.py and wait for the successful result. Then write test_intervals.py and wait for the successful result. Only then run test_intervals.py with the provided run_python_test tool. Fix any failures and stop only after the test passes.`;
+IMPORTANT: use one tool call at a time. First write intervals.py and wait for the successful result. Then write test_intervals.py and wait for the successful result. Only then run test_intervals.py with the provided run_python_test tool using the relative path "test_intervals.py". Fix any failures and stop immediately after the test returns exit code 0: do not reread either file, repeat the test, or perform extra verification.`;
 
 const controllerVerification = `
 from intervals import merge_intervals

@@ -48,6 +48,12 @@ export interface Actor {
 
 const TOOL_NAMES = ["ls", "read", "write", "edit", "run_python_test"] as const;
 
+const CODING_COMPLETION_GUIDANCE = `Coding-task completion discipline:
+- Use paths relative to the actor workspace when calling workspace tools; do not pass absolute host paths.
+- Follow the requested tool order and make the smallest necessary number of tool calls.
+- When the required test returns exit code 0, the task is complete. Stop using tools immediately and give a brief final response.
+- Do not reread files, repeat a passing test, or perform extra verification after that successful result.`;
+
 /**
  * A ResourceLoader with no discovery code at all. In particular, this is not
  * DefaultResourceLoader: no cwd ancestor, agent directory, or host home path
@@ -71,7 +77,10 @@ function createSterileResourceLoader(): ResourceLoader {
     // prompt resources are suppressed here.
     getSystemPrompt: () => undefined,
     getSystemPromptSource: () => undefined,
-    getAppendSystemPrompt: () => [],
+    // This is a small harness-level completion policy, not a replacement for
+    // Pi's built-in system prompt. It prevents coding agents from turning a
+    // verified result into an unbounded read/retry loop.
+    getAppendSystemPrompt: () => [CODING_COMPLETION_GUIDANCE],
     getAppendSystemPromptSources: () => [],
     extendResources: () => undefined,
     reload: async () => undefined,

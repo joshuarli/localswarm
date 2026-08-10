@@ -21,6 +21,22 @@ interface ModelProfile {
 }
 
 function modelProfile(modelId: string): ModelProfile {
+  if (modelId.toLowerCase().includes("laguna-xs-2.1")) {
+    return {
+      thinkingFormat: "chat-template",
+      samplingParams: {
+        temperature: 1.0,
+        top_p: 1.0,
+        min_p: 0,
+      },
+      chatTemplateKwargs: {
+        enable_thinking: { $var: "thinking.enabled" },
+      },
+      maxTokens: 16_384,
+      supportsThinkingTokenBudget: false,
+    };
+  }
+
   if (modelId.toLowerCase().includes("glm-4.7")) {
     return {
       thinkingFormat: "chat-template",

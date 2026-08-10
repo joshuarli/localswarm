@@ -1,4 +1,4 @@
-# Minimal two-agent Pi + vLLM-Metal PoC
+# Minimal Pi concurrency harness for vLLM-Metal and oMLX
 
 ## Architecture
 
@@ -95,6 +95,44 @@ LOCAL_VLLM_MODEL_ID=mlx-community/GLM-4.7-Flash-4bit \
   deno task benchmark --levels=1,2,3 --timeout-seconds=300 --keep
 ```
 
+### oMLX and Laguna XS 2.1
+
+oMLX serves the MLX checkpoint natively through its continuous-batching
+`BatchedEngine`. Install oMLX and download the 5-bit Laguna checkpoint with:
+
+```bash
+brew tap jundot/omlx https://github.com/jundot/omlx
+brew install omlx
+uvx --from huggingface-hub hf download \
+  mlx-community/Laguna-XS-2.1-5bit \
+  --local-dir ~/.omlx/models/Laguna-XS-2.1-5bit
+```
+
+Start the server with a request cap appropriate to the wave being measured:
+
+```bash
+omlx serve \
+  --model-dir ~/.omlx/models \
+  --host 127.0.0.1 --port 8000 \
+  --max-concurrent-requests 16 \
+  --memory-guard-gb 56 \
+  --no-cache
+```
+
+`--no-cache` disables oMLX's paged SSD/prefix cache; it does not disable
+MLX-LM continuous batching. Laguna's checkpoint metadata advertises a DFlash
+speculative configuration, but oMLX's default setting is DFlash disabled. The
+experiment log confirmed `BatchedEngine loaded`, with no DFlash engine. Select
+Laguna in the Pi harness as follows:
+
+```bash
+LOCAL_VLLM_MODEL_ID=Laguna-XS-2.1-5bit \
+  deno task benchmark --workload=ready --levels=4,8,16 --timeout-seconds=120 --keep
+```
+
+The checkpoint is [Laguna-XS-2.1-5bit](https://huggingface.co/mlx-community/Laguna-XS-2.1-5bit),
+and the server is [oMLX](https://github.com/jundot/omlx).
+
 ## Current observed ceiling
 
 On the Apple M1 Max with 64 GB RAM, using vLLM-Metal, a 32,768-token context,
@@ -113,6 +151,26 @@ mixed-precision variant of the same base model; it did not improve the
 concurrency ceiling in this workload. GLM-4.7-Flash is a 30B-A3B sparse MoE:
 vLLM-metal loaded it successfully and parsed tool calls, but the high-thinking
 coding agent did not complete one reliable session within the deadline.
+
+Laguna through oMLX produced a different result: the full coding workload
+timed out at c1 after 300 seconds, despite completing the implementation and
+tests. The trace showed 17 valid tool-call turns and then repeated reads and
+verification attempts before the deadline. This is a coding-agent throughput
+or behavior failure, not an engine-load or tool-parser failure; a direct tool
+smoke returned a structured `write_file` call, and oMLX reported a 21.5--21.9
+GB loaded model with the standard `BatchedEngine`.
+
+For the lighter `READY` control (one deterministic Pi response and no tools),
+Laguna passed all tested levels:
+
+| Model / server | c4 | c8 | c16 | Interpretation |
+| --- | ---: | ---: | ---: | --- |
+| `Laguna-XS-2.1-5bit` via oMLX BatchedEngine | Pass, 21.5s | Pass, 45.4s | Pass, 74.0s | At least 16 short Pi sessions |
+
+These short controls do not represent 16 full 32K coding workers. They do show
+that Pi session startup and oMLX batching are healthy well beyond the two-agent
+coding ceiling. The full coding workload remains the meaningful reliability
+measure until the task or agent loop is made shorter.
 
 As a serving-capacity control, GLM passed the deterministic `READY` workload at
 1, 2, 4, 8, 12, 16, 18, and 20 concurrent Pi sessions. These are short
