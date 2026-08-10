@@ -34,7 +34,8 @@ function modelProfile(modelId: string): ModelProfile {
       },
       // High-thinking coding turns can spend most of 2K before emitting a
       // complete structured tool call. Keep enough headroom for the required
-      // write call; the server's eight-request cap remains the KV guardrail.
+      // write call; the server and benchmark admission caps remain the KV
+      // guardrails.
       maxTokens: 4_096,
       supportsThinkingTokenBudget: false,
     };

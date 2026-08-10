@@ -54,11 +54,15 @@ smallest tool surface needed by its fixed task. It sweeps 1, 2, 4, 6, and 8
 concurrent sessions, stopping at the first failed level. Use `--workload=ready`
 for a deterministic session-overhead control, `--repeats=2` for repeated runs,
 `--stagger-ms=1000` to spread prompt admission across a wave, or
-`--levels=10,12,14,16` to probe beyond the reliable coding boundary. For a
-larger logical wave, use `--admission-concurrency=8` to bound active KV state;
-the benchmark reports both logical concurrency and active peak. The reported
-maximum is an empirical session-workload result, not a general server capacity
-guarantee.
+`--levels=10,12,14,16` to probe beyond the reliable coding boundary. Coding
+waves default to `--admission-concurrency=auto`: the harness admits up to 16
+sessions while keeping at least 20% system memory free, and falls back to eight
+when the macOS memory probe is unavailable. Use an explicit numeric value to
+test a fixed active-KV bound, or `--admission-concurrency=0` for an unbounded
+wave. READY controls remain unbounded by default so they can measure the
+server's own request ceiling. The benchmark reports both logical concurrency
+and active peak; the reported maximum is an empirical session-workload result,
+not a general server capacity guarantee.
 
 ### oMLX and Laguna XS 2.1
 
@@ -79,7 +83,7 @@ Start the server with a request cap appropriate to the wave being measured:
 omlx serve \
   --model-dir ~/.omlx/models \
   --host 127.0.0.1 --port 8000 \
-  --max-concurrent-requests 8 \
+  --max-concurrent-requests 16 \
   --memory-guard-gb 56 \
   --no-cache
 ```
@@ -90,7 +94,8 @@ speculative configuration, but oMLX's default setting is DFlash disabled. The
 experiment log confirmed `BatchedEngine loaded`, with no DFlash engine. The
 Laguna provider keeps the 32,768-token context and high thinking, and allows
 up to 4,096 generated tokens so high-thinking tool calls are not truncated. The
-server's eight-request cap remains the working-set guardrail.
+server's 16-request cap is an upper ceiling; coding waves use the harness's
+memory-aware admission policy underneath it.
 Select Laguna in the Pi harness as follows:
 
 ```bash
@@ -109,7 +114,7 @@ by repeated reads and verification attempts. After adding the completion policy
 described above, c1 passed twice at 94.2s and 134.1s. This retained the 32K
 context and high-thinking configuration; it was a prompt/agent-loop fix, not a
 lower reasoning setting. A direct tool smoke returned a structured `write_file`
-call, and oMLX reported a 21.5--21.9 GB loaded model with the standard
+call, and oMLX reported a 21.5--22.5 GB loaded model with the standard
 `BatchedEngine`.
 
 At full coding c16 with the original five-tool session surface, all 16 sessions
@@ -118,12 +123,14 @@ hit the 300-second deadline. oMLX reached about 45 GB during the wave against a
 throughput under batching, not model-load failure. The current benchmark
 narrows that fixed programming workload to `write_interval_files` and
 `run_python_test`, with one multi-file write, to reduce each session's prompt
-and tool-choice footprint. High-thinking c8 now passes at the safe eight-request
-server cap: 8/8 sessions completed, workspace and controller verification
-passed, wall time was 242.3s, and active peak was 8. Unbounded c16 remains
-outside the reliable boundary; use `--admission-concurrency=8` only when
-measuring a larger logical wave in bounded physical batches, and treat its wall
-time separately from true c16 simultaneity.
+and tool-choice footprint. The memory-aware policy now lets the server reach
+active peak 16 because host free memory stayed well above its 20% floor. In
+high-thinking coding runs, c12 passed all 12 sessions in 284.0s with active
+peak 12; c14 failed 2/14 at the 300s deadline; and c16 failed 5/16. Host free
+memory stayed roughly 56--60% during these waves, so ordinary host RAM was not
+the binding signal. c12 is the current reliable sweet spot for this fixed
+32K-context coding workload; c14 and c16 remain throughput/KV-bound even though
+the machine reports substantial free memory.
 
 Attempts to make full coding work at c32 were stopped early after no actor had
 received a first model response: the original 16,384-token output profile made
@@ -146,7 +153,8 @@ These short controls do not represent 32 full 32K coding workers. They do show
 that Pi session startup and oMLX batching are healthy well beyond the two-agent
 coding ceiling. The c48 wave triggered hard-memory pressure/reclaim and did not
 complete within the control deadline. The full coding workload remains the
-meaningful reliability measure: high-thinking c8 is reliable, while c16 is not.
+meaningful reliability measure: high-thinking c12 is reliable, while c14 and
+c16 are not.
 
 ## Expected result
 

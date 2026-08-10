@@ -10,6 +10,10 @@ import {
   MODEL_ID,
   VLLM_BASE_URL,
 } from "./provider.ts";
+import {
+  createAdmissionLimiter,
+  createAutoAdmissionLimiter,
+} from "./admission.ts";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const decoder = new TextDecoder();
@@ -97,8 +101,15 @@ interface BenchmarkOptions {
   timeoutMs: number;
   keepArtifacts: boolean;
   staggerMs: number;
-  admissionConcurrency: number;
+  admissionConcurrency: number | "auto";
 }
+
+type AdmissionPolicy = number | "auto";
+
+const AUTO_ADMISSION_MAX = 16;
+const AUTO_ADMISSION_FALLBACK_MAX = 8;
+const AUTO_FREE_MEMORY_FLOOR_PERCENT = 20;
+const AUTO_ADMISSION_SETTLE_MS = 1_000;
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -143,10 +154,11 @@ function parseOptions(args: string[]): BenchmarkOptions {
     getValue("stagger-ms") ?? "0",
     "stagger-ms",
   );
-  const admissionConcurrency = parseNonNegativeInteger(
-    getValue("admission-concurrency") ?? "0",
-    "admission-concurrency",
-  );
+  const admissionValue = getValue("admission-concurrency") ??
+    (workload === "programming" ? "auto" : "0");
+  const admissionConcurrency: AdmissionPolicy = admissionValue === "auto"
+    ? "auto"
+    : parseNonNegativeInteger(admissionValue, "admission-concurrency");
 
   return {
     workload,
@@ -320,28 +332,39 @@ async function runSession(
   };
 }
 
-function createAdmissionLimiter(limit: number): {
-  acquire: () => Promise<() => void>;
-} {
-  let available = limit;
-  const waiters: Array<() => void> = [];
-  return {
-    acquire: async () => {
-      if (available > 0) {
-        available -= 1;
-      } else {
-        await new Promise<void>((resolve) => waiters.push(resolve));
-      }
-      let released = false;
-      return () => {
-        if (released) return;
-        released = true;
-        const next = waiters.shift();
-        if (next) next();
-        else available += 1;
-      };
-    },
-  };
+async function readFreeMemoryPercent(): Promise<number | undefined> {
+  try {
+    const output = await new Deno.Command("memory_pressure", {
+      args: ["-Q"],
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    const text = decoder.decode(output.stdout);
+    const match = text.match(/memory free percentage:\s*(\d+)%/i);
+    return match ? Number(match[1]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function createConfiguredAdmissionLimiter(
+  policy: AdmissionPolicy,
+  concurrency: number,
+): ReturnType<typeof createAdmissionLimiter> {
+  if (policy === "auto") {
+    return createAutoAdmissionLimiter(
+      {
+        maxConcurrency: Math.min(concurrency, AUTO_ADMISSION_MAX),
+        fallbackMaxConcurrency: AUTO_ADMISSION_FALLBACK_MAX,
+        freeMemoryFloorPercent: AUTO_FREE_MEMORY_FLOOR_PERCENT,
+        freeMemoryPercent: readFreeMemoryPercent,
+        settleMs: AUTO_ADMISSION_SETTLE_MS,
+      },
+    );
+  }
+  return createAdmissionLimiter(
+    policy > 0 ? Math.min(policy, concurrency) : concurrency,
+  );
 }
 
 async function createWaveActors(
@@ -377,7 +400,7 @@ async function runWave(
   workload: Workload,
   timeoutMs: number,
   staggerMs: number,
-  admissionConcurrency: number,
+  admissionConcurrency: AdmissionPolicy,
 ): Promise<WaveResult> {
   observedActiveSessions = 0;
   maxObservedActiveSessions = 0;
@@ -388,10 +411,9 @@ async function runWave(
     model,
     workload === "programming" ? programmingToolNames : undefined,
   );
-  const admission = createAdmissionLimiter(
-    admissionConcurrency > 0
-      ? Math.min(admissionConcurrency, concurrency)
-      : concurrency,
+  const admission = createConfiguredAdmissionLimiter(
+    admissionConcurrency,
+    concurrency,
   );
   const startedAt = performance.now();
   const outcomes = await Promise.all(
@@ -502,7 +524,9 @@ async function main(): Promise<void> {
   console.log(`repeats: ${options.repeats}`);
   console.log(`prompt stagger: ${options.staggerMs}ms`);
   console.log(
-    `session admission: ${options.admissionConcurrency > 0
+    `session admission: ${options.admissionConcurrency === "auto"
+      ? "auto (80% memory target)"
+      : options.admissionConcurrency > 0
       ? options.admissionConcurrency
       : "unbounded"}`,
   );
