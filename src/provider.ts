@@ -1,10 +1,65 @@
-import { InMemoryCredentialStore, type Model } from "@earendil-works/pi-ai";
+import {
+  InMemoryCredentialStore,
+  type ChatTemplateKwargValue,
+  type Model,
+} from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 export const PROVIDER_ID = "local-vllm";
-export const MODEL_ID = "Qwen/Qwen3-1.7B";
+export const DEFAULT_MODEL_ID = "Qwen/Qwen3-1.7B";
+export const MODEL_ID = Deno.env.get("LOCAL_VLLM_MODEL_ID") ??
+  DEFAULT_MODEL_ID;
 export const VLLM_BASE_URL = "http://127.0.0.1:8000/v1";
 export const CONTEXT_WINDOW = 32768;
+
+interface ModelProfile {
+  samplingParams?: Record<string, unknown>;
+  maxTokens: number;
+  thinkingFormat: "qwen" | "chat-template";
+  chatTemplateKwargs?: Record<string, ChatTemplateKwargValue>;
+  supportsThinkingTokenBudget: boolean;
+}
+
+function modelProfile(modelId: string): ModelProfile {
+  if (modelId.toLowerCase().includes("glm-4.7")) {
+    return {
+      thinkingFormat: "chat-template",
+      samplingParams: {
+        temperature: 0.7,
+        top_p: 1.0,
+      },
+      chatTemplateKwargs: {
+        enable_thinking: { $var: "thinking.enabled" },
+        clear_thinking: false,
+      },
+      maxTokens: 16_384,
+      supportsThinkingTokenBudget: false,
+    };
+  }
+
+  if (modelId.toLowerCase().includes("qwen3.5")) {
+    return {
+      thinkingFormat: "qwen",
+      samplingParams: {
+        enable_thinking: true,
+        temperature: 0.6,
+        top_p: 0.95,
+        top_k: 20,
+        presence_penalty: 0,
+        repetition_penalty: 1,
+      },
+      maxTokens: 8_192,
+      supportsThinkingTokenBudget: true,
+    };
+  }
+
+  return {
+    thinkingFormat: "qwen",
+    samplingParams: { enable_thinking: true },
+    maxTokens: 8_192,
+    supportsThinkingTokenBudget: true,
+  };
+}
 
 /**
  * Construct the only model provider used by this PoC.
@@ -17,6 +72,7 @@ export async function createLocalVllmProvider(): Promise<{
   modelRuntime: ModelRuntime;
   model: Model<"openai-completions">;
 }> {
+  const profile = modelProfile(MODEL_ID);
   const modelRuntime = await ModelRuntime.create({
     credentials: new InMemoryCredentialStore(),
     modelsPath: null,
@@ -41,17 +97,14 @@ export async function createLocalVllmProvider(): Promise<{
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: CONTEXT_WINDOW,
-        maxTokens: 8192,
-        samplingParams: {
-          // This is vLLM's Qwen3 switch; high reasoning is selected by Pi's
-          // thinking level for each session.
-          enable_thinking: true,
-        },
+        maxTokens: profile.maxTokens,
+        samplingParams: profile.samplingParams,
         compat: {
           supportsDeveloperRole: false,
           supportsReasoningEffort: false,
-          supportsThinkingTokenBudget: true,
-          thinkingFormat: "qwen",
+          supportsThinkingTokenBudget: profile.supportsThinkingTokenBudget,
+          thinkingFormat: profile.thinkingFormat,
+          chatTemplateKwargs: profile.chatTemplateKwargs,
           supportsUsageInStreaming: true,
           maxTokensField: "max_tokens",
         },

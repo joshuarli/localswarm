@@ -22,9 +22,36 @@ const programmingTask =
 
 Implement intervals.py with a merge_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]] function. Treat each interval as inclusive. Sort the input by start, merge overlapping or adjacent intervals, return a new list, and raise ValueError when any interval has start greater than end. Do not mutate the input and use only Python's standard library.
 
-Create test_intervals.py using only Python's standard library. Import the function with "from intervals import merge_intervals". Test unsorted intervals, overlapping intervals, adjacent intervals, negative values, input immutability, and invalid intervals. Do not use pytest or any third-party package.
+For integer intervals, define adjacent precisely: [1, 2] and [3, 4] are adjacent and must merge because there is no integer gap; [1, 2] and [4, 5] are not adjacent because 3 is missing.
+
+Create test_intervals.py using only Python's standard library. Import the function with "from intervals import merge_intervals". Keep this test file minimal: use exactly these cases and no extra cases: unsorted chained intervals [(5, 7), (1, 2), (3, 4)] -> [(1, 7)]; overlapping intervals [(1, 10), (2, 6), (8, 12)] -> [(1, 12)]; adjacent intervals [(1, 2), (3, 4)] -> [(1, 4)]; a one-integer gap [(1, 2), (4, 5)] -> [(1, 2), (4, 5)]; negative intervals [(-10, -8), (-5, -1)] -> [(-10, -8), (-5, -1)]; an empty list -> []; input immutability; and invalid intervals [(2, 1)] raising ValueError. Do not use pytest or any third-party package.
 
 IMPORTANT: use one tool call at a time. First write intervals.py and wait for the successful result. Then write test_intervals.py and wait for the successful result. Only then run test_intervals.py with the provided run_python_test tool. Fix any failures and stop only after the test passes.`;
+
+const controllerVerification = `
+from intervals import merge_intervals
+
+
+def check(actual, expected):
+    assert actual == expected, f"expected {expected!r}, got {actual!r}"
+
+
+original = [(5, 7), (1, 2), (3, 4), (10, 12), (11, 15)]
+snapshot = list(original)
+check(merge_intervals(original), [(1, 7), (10, 15)])
+assert original == snapshot, "merge_intervals mutated its input"
+check(merge_intervals([(-10, -8), (-5, -1)]), [(-10, -8), (-5, -1)])
+check(merge_intervals([(1, 2), (3, 4)]), [(1, 4)])
+check(merge_intervals([(1, 2), (4, 5)]), [(1, 2), (4, 5)])
+check(merge_intervals([]), [])
+
+try:
+    merge_intervals([(2, 1)])
+except ValueError:
+    pass
+else:
+    raise AssertionError("invalid intervals must raise ValueError")
+`;
 
 interface TokenStats {
   input: number;
@@ -149,6 +176,34 @@ async function runPythonTest(
   }
 }
 
+async function runControllerVerification(
+  workspace: string,
+): Promise<string | undefined> {
+  const child = new Deno.Command("python3", {
+    args: ["-c", controllerVerification],
+    cwd: workspace,
+    stdout: "piped",
+    stderr: "piped",
+  }).spawn();
+  const timeout = setTimeout(() => {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // The process may have exited already.
+    }
+  }, 30_000);
+  try {
+    const output = await child.output();
+    if (output.code === 0) return undefined;
+    const stdout = decoder.decode(output.stdout);
+    const stderr = decoder.decode(output.stderr);
+    return `${stdout}${stderr ? `\n${stderr}` : ""}`.trim() ||
+      `exit code ${output.code}`;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function verifyProgrammingWorkspace(
   workspace: string,
 ): Promise<string | undefined> {
@@ -161,7 +216,10 @@ async function verifyProgrammingWorkspace(
       return formatError(error);
     }
   }
-  return await runPythonTest(workspace, "test_intervals.py");
+  const modelTests = await runPythonTest(workspace, "test_intervals.py");
+  if (modelTests) return `model tests: ${modelTests}`;
+  const controllerTests = await runControllerVerification(workspace);
+  return controllerTests ? `controller tests: ${controllerTests}` : undefined;
 }
 
 async function runSession(
