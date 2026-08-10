@@ -1,131 +1,213 @@
-Build a minimal, reproducible macOS Apple Silicon proof-of-concept that runs **two independent Pi coding-agent actors concurrently against one shared local Qwen3-1.7B inference server using vLLM-Metal**.
+# Task: Minimal 2-Agent Pi + vLLM-Metal PoC on macOS
 
-The goal is NOT to build a swarm framework yet. The goal is to establish a clean, reliable substrate that proves:
+Build a minimal proof-of-concept that runs **two completely isolated Pi coding agents concurrently through the Pi SDK under Deno**, both backed by **one shared local `Qwen/Qwen3-1.7B` instance served by vLLM-Metal**.
 
-1. Qwen3-1.7B runs correctly through vLLM-Metal on this Mac.
-2. vLLM exposes a working OpenAI-compatible local endpoint.
-3. Pi can use that endpoint as a custom provider.
-4. Two Pi actors can run concurrently with independent conversation state.
-5. Both actors share the same loaded model instance; do NOT start two copies of Qwen3-1.7B.
-6. The setup is easy to reproduce, inspect, benchmark, and later scale from 2 → 20+ logical actors.
+This is infrastructure validation only.
 
-## Constraints
+Do not build a swarm framework yet.
 
-Target only:
+## Goal
 
-* macOS
-* Apple Silicon / arm64
-* native Metal acceleration
-* Qwen/Qwen3-1.7B
+Prove this topology:
+
+```text
+                         macOS / Apple Silicon
+
+                         vLLM-Metal
+                              │
+                       Qwen3-1.7B
+                     loaded exactly once
+                              │
+                   OpenAI-compatible API
+                    http://127.0.0.1:8000
+                              │
+                ┌─────────────┴─────────────┐
+                │                           │
+          isolated Pi agent A        isolated Pi agent B
+             Pi SDK / Deno              Pi SDK / Deno
+                │                           │
+        workspace/actor-a           workspace/actor-b
+                └─────────────┬─────────────┘
+                              │
+                      tiny Deno controller
+```
+
+There are **two logical agents, not two model replicas**.
+
+Both agents must independently maintain their own Pi conversation/session state while sharing the same vLLM inference endpoint and underlying model weights.
+
+---
+
+# Hard constraints
+
+Use:
+
+* macOS Apple Silicon
+* Deno
+* Pi SDK
 * vLLM-Metal
-* Pi coding agent
-* two concurrent Pi actors
+* `Qwen/Qwen3-1.7B`
+* one vLLM server
+* two concurrent Pi agents
 
-Do not add:
+Do not use:
 
+* Pi RPC subprocesses
+* Node.js as the application runtime
 * Docker
 * Kubernetes
 * Ray
 * SGLang
 * llama.cpp
-* external databases
 * Redis
-* message queues
-* web UI
-* generic orchestration frameworks
-* distributed/multi-Mac serving
+* Postgres
+* message brokers
+* web frameworks
+* generic agent orchestration frameworks
+* distributed serving
+* multiple model replicas
 * LoRA
 * RL infrastructure
 
-Keep the implementation aggressively minimal.
+Keep the implementation extremely small.
 
-Before making assumptions about CLI flags or config schemas, consult the CURRENT official documentation for:
+Dependency installation and machine preflight are out of scope. Assume:
 
-* vLLM-Metal
-* upstream vLLM serving
-* Pi custom models/providers
-* Pi RPC mode
-* Qwen3-1.7B
+* Deno works;
+* Pi and/or its SDK dependencies can be resolved;
+* vLLM-Metal works;
+* Qwen3-1.7B can be served locally.
 
-Do not cargo-cult commands from old blog posts.
+If an API detail is uncertain, consult the current official Pi SDK documentation before implementing it.
 
-## Architecture
+Do not reproduce setup tutorials for dependencies.
 
-Implement exactly this topology:
+---
 
-```text
-                     macOS Apple Silicon
-                            │
-                     vLLM-Metal
-                            │
-                     Qwen3-1.7B
-                    loaded exactly once
-                            │
-                OpenAI-compatible HTTP
-                     localhost:8000
-                       /v1/...
-                            │
-                 ┌──────────┴──────────┐
-                 │                     │
-              Pi actor A            Pi actor B
-               RPC mode              RPC mode
-                 │                     │
-                 └──────────┬──────────┘
-                            │
-                    tiny PoC controller
-```
+# Most important invariant: hermetic Pi agents
 
-The controller should prove concurrent operation, not implement sophisticated scheduling.
+Each Pi agent must run with an **explicit, minimal configuration assembled by this project**.
 
-## Phase 1: preflight
+It must NOT implicitly discover, inherit, merge, or load configuration from the host user's normal Pi environment.
 
-Detect and print:
+In particular, neither actor may read or inherit:
 
-* macOS version
-* Apple Silicon model/chip if readily available
-* total unified memory
-* `uname -m`
-* Python version and architecture
-* Node version
-* npm version
-* whether `pi` is already installed
-* whether port 8000 is available
+* `~/.pi/...`
+* existing Pi settings
+* existing Pi model/provider definitions
+* existing Pi sessions
+* existing Pi prompts
+* existing Pi extensions
+* existing Pi skills
+* existing Pi tools/configuration
+* project-level Pi configuration outside this PoC
+* user-level agent instructions
+* unrelated environment-driven Pi configuration
 
-Fail clearly if the machine is not arm64 Apple Silicon.
+Do not instantiate the SDK with defaults that cause Pi to walk the filesystem looking for ambient configuration.
 
-vLLM-Metal currently requires native arm64 Python 3.12. Do not use Rosetta Python.
+Prefer explicit SDK construction where every relevant piece of configuration is supplied programmatically.
 
-Avoid modifying unrelated global Python environments.
-
-## Phase 2: install vLLM-Metal
-
-Use the current official vLLM-Metal installation method.
-
-Prefer its standard isolated environment rather than inventing a custom dependency layout unless there is a concrete reason not to.
-
-Verify installation with:
+If the Pi SDK itself requires filesystem-backed config/state, give **each actor its own synthetic isolated config root** under this repository, for example:
 
 ```text
-vllm --version
+.runtime/
+├── actor-a/
+│   ├── config/
+│   ├── state/
+│   └── sessions/
+└── actor-b/
+    ├── config/
+    ├── state/
+    └── sessions/
 ```
 
-and a minimal Python import check.
+Never point either actor at the real host home directory.
 
-Capture exact installed versions in a machine-readable or plain-text environment report.
+If necessary, construct a sterile environment/config abstraction per actor or explicitly override any SDK resource loaders so host configuration cannot be discovered.
 
-Do not silently upgrade unrelated system packages.
+The resulting architecture should make this statement true:
 
-## Phase 3: run Qwen3-1.7B
+> Deleting or radically changing `~/.pi` has zero effect on this PoC.
 
-Use:
+That property is an acceptance criterion.
+
+---
+
+# Minimal agent phenotype
+
+Both agents should begin essentially identical.
+
+Do not preload personalities, role prompts, skills, elaborate system instructions, or other behavior.
+
+Each actor should have only:
+
+```text
+model
+working directory
+minimal coding tools
+task
+```
+
+The purpose is to establish a clean baseline from which actor specialization can later be experimentally introduced.
+
+Do not give actors access to unnecessary tools.
+
+For this PoC, expose only the minimum capabilities required to:
+
+1. inspect their own workspace;
+2. write/edit files inside their own workspace;
+3. execute the tiny test they create.
+
+Prefer the smallest Pi-native tool set that provides those capabilities.
+
+Do not enable:
+
+* web search
+* browser access
+* external network tools
+* arbitrary MCP servers
+* skills
+* extensions
+* memory systems
+* subagents
+* planning frameworks
+* host filesystem exploration
+
+If Pi's stock coding tools expose broader filesystem access than desired, constrain them through working-directory boundaries or a minimal custom tool wrapper.
+
+The actor should conceptually see:
+
+```text
+actor-a
+  cwd = ./workspaces/actor-a
+```
+
+and not care that the rest of the repository exists.
+
+Likewise for actor B.
+
+---
+
+# Inference server
+
+Assume one server is already available at:
+
+```text
+http://127.0.0.1:8000/v1
+```
+
+serving:
 
 ```text
 Qwen/Qwen3-1.7B
 ```
 
-as the canonical model.
+Do not start a second model instance.
 
-Start ONE server, initially equivalent in spirit to:
+Provide a small optional convenience script for starting the server if useful, but server installation/setup is not the focus.
+
+A representative launch is:
 
 ```bash
 vllm serve Qwen/Qwen3-1.7B \
@@ -134,424 +216,464 @@ vllm serve Qwen/Qwen3-1.7B \
   --max-model-len 8192
 ```
 
-But verify current supported flags against the installed version before finalizing the command.
+Verify flags against the installed vLLM version rather than assuming this exact invocation.
 
-Prefer an 8192-token maximum context for the PoC. We are testing concurrent actors, not giant context windows.
-
-If vLLM-Metal exposes a documented unified-memory allocation knob that is useful here, use a conservative value only if necessary. Do not prematurely tune it.
-
-Do not quantize initially unless BF16 fails for a concrete capacity reason.
-
-Do not launch data-parallel replicas.
-
-Do not load the model twice.
-
-## Phase 4: raw inference smoke tests
-
-Before involving Pi, prove the inference server works directly.
-
-Implement a small smoke-test script that:
-
-1. waits for the server to become healthy;
-2. queries the OpenAI-compatible models endpoint if available;
-3. makes one chat-completion request;
-4. validates that meaningful text is returned;
-5. launches TWO chat requests concurrently;
-6. reports:
-
-   * wall-clock duration;
-   * individual request latency;
-   * output token count if exposed;
-   * model identifier;
-   * any server-side usage statistics available.
-
-Use two deliberately distinct prompts so responses cannot be confused.
-
-For example:
-
-Actor A task:
+Use:
 
 ```text
-Write a Python function that computes Fibonacci numbers iteratively.
-Return only code.
+context window: 8192
 ```
 
-Actor B task:
+for the PoC.
+
+Do not optimize memory aggressively yet.
+
+Do not quantize unless required for a concrete reason.
+
+---
+
+# Qwen3 mode
+
+Run Qwen3-1.7B in **non-thinking mode**.
+
+We are measuring the behavior of cheap narrow agents and exercising concurrency, not spending tokens on extended reasoning.
+
+Use the cleanest supported mechanism available through the Pi SDK / OpenAI-compatible provider / vLLM chat template.
+
+Do not rely on `/no_think` prompt text unless there is genuinely no cleaner mechanism.
+
+Document the mechanism in one sentence in the README.
+
+---
+
+# Pi provider construction
+
+Construct the local provider explicitly in code.
+
+Do not register it globally.
+
+Do not modify `~/.pi/agent/models.json`.
+
+Do not require the user's existing Pi configuration to know about the model.
+
+The provider definition should be local to this PoC and conceptually contain only:
 
 ```text
-Write a Python function that checks whether an integer is prime.
-Return only code.
+provider id: local-vllm
+API: OpenAI-compatible completions/chat
+base URL: http://127.0.0.1:8000/v1
+model: Qwen/Qwen3-1.7B
+context: 8192
+reasoning: false
+cost: zero
 ```
 
-The important acceptance criterion is that the two requests overlap in time and are serviced by the same inference server.
+Use Pi's documented SDK abstractions rather than shelling out to the Pi CLI.
 
-## Phase 5: configure Pi
+The Deno program should import/use the Pi SDK directly.
 
-Install Pi only if it is not already installed.
+If Pi's published SDK package is distributed through npm, use Deno's native `npm:` package support rather than introducing npm/node project scaffolding.
 
-Use the current official package/instructions.
+Do not add `package.json` unless absolutely required.
 
-Configure a custom provider for the local vLLM endpoint using Pi's supported OpenAI-compatible provider mechanism.
-
-Prefer project-local configuration if Pi supports that cleanly; otherwise document exactly which user-level file was modified.
-
-The effective configuration should conceptually resemble:
-
-```json
-{
-  "providers": {
-    "vllm-local": {
-      "baseUrl": "http://127.0.0.1:8000/v1",
-      "api": "openai-completions",
-      "apiKey": "local",
-      "models": [
-        {
-          "id": "Qwen/Qwen3-1.7B",
-          "name": "Qwen3 1.7B Local",
-          "reasoning": false,
-          "input": ["text"],
-          "contextWindow": 8192,
-          "maxTokens": 2048,
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          }
-        }
-      ]
-    }
-  }
-}
-```
-
-Do not blindly copy this schema if current Pi documentation differs. Adapt it to the installed version.
-
-If vLLM does not support Pi's default `developer` role or `reasoning_effort` behavior correctly, configure Pi's documented compatibility flags rather than hacking prompts.
-
-## Qwen3 thinking behavior
-
-For this PoC, prefer Qwen3 in **non-thinking mode**.
-
-The purpose is to test actor concurrency and plumbing, not burn tokens on hidden/extended reasoning.
-
-Use the cleanest currently supported mechanism to disable thinking through either:
-
-* the model/server chat-template configuration; or
-* Pi/provider request compatibility;
-
-whichever is actually supported end-to-end.
-
-Do not rely on fragile prompt text like `/no_think` unless there is no cleaner supported mechanism.
-
-Document exactly how thinking was disabled.
-
-## Phase 6: two Pi RPC actors
-
-Run two completely independent Pi instances using RPC/headless mode.
-
-Conceptually:
-
-```bash
-pi \
-  --mode rpc \
-  --no-session \
-  --provider vllm-local \
-  --model Qwen/Qwen3-1.7B \
-  --name actor-a
-```
-
-and separately:
-
-```bash
-pi \
-  --mode rpc \
-  --no-session \
-  --provider vllm-local \
-  --model Qwen/Qwen3-1.7B \
-  --name actor-b
-```
-
-Again, verify current CLI syntax before finalizing.
-
-Each process must have:
-
-* independent stdin/stdout RPC channel;
-* independent conversational state;
-* distinct actor name;
-* no shared Pi session file;
-* the same vLLM endpoint;
-* the same underlying Qwen3 model weights.
-
-## Phase 7: tiny controller
-
-Write the smallest reasonable controller to spawn and drive both Pi RPC processes.
-
-Prefer TypeScript/Node if that matches Pi's native SDK/runtime cleanly. Python is acceptable if subprocess handling is materially simpler.
-
-Do NOT introduce a framework.
-
-Responsibilities:
-
-1. spawn actor A;
-2. spawn actor B;
-3. wait until both are ready;
-4. send one coding task to each nearly simultaneously;
-5. consume their JSONL event streams correctly;
-6. distinguish events by actor;
-7. wait until both agents settle;
-8. print final responses separately;
-9. terminate cleanly;
-10. report elapsed wall time.
-
-Respect Pi RPC's strict JSONL framing. Do not use a line parser that violates Pi's documented RPC semantics.
-
-Structure output approximately like:
+Prefer:
 
 ```text
-[vllm] ready
-[actor-a] spawned
-[actor-b] spawned
-
-[actor-a] prompt submitted
-[actor-b] prompt submitted
-
-[actor-a] ...
-[actor-b] ...
-
-=== actor-a final ===
-...
-
-=== actor-b final ===
-...
-
-elapsed: 4.21s
+deno.json
 ```
 
-Color is unnecessary.
+and normal Deno imports.
 
-## Actor prompts
+---
 
-Give each Pi instance a narrow coding task that allows actual tool use but cannot interfere with the other actor.
+# Actor construction
 
-Create:
+Create a very small helper along the lines of:
 
 ```text
-workspaces/
-  actor-a/
-  actor-b/
+createActor({
+    id,
+    workspace,
+    runtimeRoot,
+    model,
+    tools,
+})
 ```
 
-Actor A works only inside `workspaces/actor-a`.
+This helper must produce an isolated Pi agent instance.
 
-Actor B works only inside `workspaces/actor-b`.
+The two invocations should differ only in identity and filesystem paths:
 
-Task A:
+```text
+actor A
+    id: actor-a
+    workspace: workspaces/actor-a
+    runtime: .runtime/actor-a
+
+actor B
+    id: actor-b
+    workspace: workspaces/actor-b
+    runtime: .runtime/actor-b
+```
+
+Do not introduce an inheritance hierarchy, actor framework, dependency injection system, or generic plugin architecture.
+
+A plain TypeScript function is sufficient.
+
+---
+
+# Tasks
+
+Actor A receives:
 
 ```text
 Create fib.py containing a clean iterative Fibonacci implementation.
-Add a tiny self-contained test using Python's standard library.
-Run the test and stop when it passes.
+
+Create a tiny self-contained test using only Python's standard library.
+
+Run the test.
+
+Stop when it passes.
 ```
 
-Task B:
+Actor B receives:
 
 ```text
 Create prime.py containing a clean primality-test implementation.
-Add a tiny self-contained test using Python's standard library.
-Run the test and stop when it passes.
+
+Create a tiny self-contained test using only Python's standard library.
+
+Run the test.
+
+Stop when it passes.
 ```
 
-The controller must verify afterward that:
+The tasks should begin concurrently.
+
+Use:
+
+```ts
+await Promise.all([
+  runActor(actorA, taskA),
+  runActor(actorB, taskB),
+]);
+```
+
+or the appropriate equivalent for the Pi SDK.
+
+Do not serially await one actor before starting the other.
+
+---
+
+# Workspace isolation
+
+Repository structure:
+
+```text
+.
+├── README.md
+├── deno.json
+├── src/
+│   ├── main.ts
+│   ├── actor.ts
+│   └── provider.ts
+├── workspaces/
+│   ├── actor-a/
+│   └── actor-b/
+├── .runtime/
+│   ├── actor-a/
+│   └── actor-b/
+└── .gitignore
+```
+
+Collapse files further if doing so improves clarity.
+
+`.runtime/` should be ignored.
+
+Each actor may modify only its own workspace.
+
+Actor A must never write into actor B's workspace.
+
+Actor B must never write into actor A's workspace.
+
+After execution, the controller verifies:
 
 ```text
 workspaces/actor-a/fib.py
 workspaces/actor-b/prime.py
 ```
 
-exist and that their tests pass.
+exist.
 
-This proves more than plain inference: two independent Pi coding loops can concurrently call the same weak local LLM and manipulate isolated working directories.
+It should then independently execute the resulting tests or otherwise verify that both actor-created test suites pass.
 
-## Process management
+Do not rely solely on the agent claiming that tests passed.
 
-Provide scripts or equivalent commands for:
+---
 
-```text
-setup
-start-server
-smoke-test
-run-poc
-stop-server
-```
+# Controller behavior
 
-Keep these as simple shell scripts or a small Makefile justifying whichever is cleaner.
-
-Server lifecycle must be understandable.
-
-Store PID/log information under a local project directory such as:
+The Deno controller should do only the following:
 
 ```text
-.run/
+construct local model/provider
+        ↓
+construct isolated actor A
+construct isolated actor B
+        ↓
+start both concurrently
+        ↓
+stream useful events
+        ↓
+wait for completion
+        ↓
+verify resulting artifacts/tests
+        ↓
+print summary
 ```
 
-Do not daemonize through launchd.
+No queue.
 
-Capture vLLM stdout/stderr to:
+No scheduler.
+
+No agent-to-agent communication.
+
+No durable knowledge system.
+
+No control-plane abstraction yet.
+
+---
+
+# Event logging
+
+Use Pi SDK events directly where available.
+
+Prefix emitted events by actor:
 
 ```text
-.run/vllm.log
+[actor-a] ...
+[actor-b] ...
 ```
 
-On failure, print where the log is.
+Do not dump enormous raw model payloads by default.
 
-Handle Ctrl-C and child-process cleanup correctly.
-
-## Observability
-
-The PoC should expose enough information to answer:
-
-* Was there one model process or accidentally two?
-* Were both actors active concurrently?
-* How long did each actor take?
-* How long did the complete two-actor run take?
-* Did either request fail/retry?
-* How much unified memory did the server consume approximately?
-* What exact model/provider/version handled the requests?
-
-Do not build Prometheus/OpenTelemetry.
-
-Plain structured logs are sufficient.
-
-If easy, sample memory using native macOS tooling before and during the concurrent run.
-
-## Repository layout
-
-Aim for something roughly this small:
+Show useful lifecycle information such as:
 
 ```text
-.
-├── README.md
-├── Makefile                 # optional
-├── scripts/
-│   ├── setup.sh
-│   ├── start-server.sh
-│   ├── stop-server.sh
-│   └── smoke-test.py
-├── controller/
-│   └── ...
-├── workspaces/
-│   ├── actor-a/
-│   └── actor-b/
-├── .run/
-│   └── .gitkeep
-└── .gitignore
+[actor-a] started
+[actor-b] started
+
+[actor-a] tool: write fib.py
+[actor-b] tool: write prime.py
+
+[actor-a] tool: python ...
+[actor-b] tool: python ...
+
+[actor-a] complete
+[actor-b] complete
 ```
 
-Avoid scaffolding unless necessary.
+At the end print something like:
 
-## README
+```text
+=== RESULT ===
 
-Write a concise README covering:
+actor-a
+  status: success
+  elapsed: 8.4s
+  file: workspaces/actor-a/fib.py
+  verification: passed
 
-### Architecture
+actor-b
+  status: success
+  elapsed: 9.7s
+  file: workspaces/actor-b/prime.py
+  verification: passed
+
+wall time: 9.8s
+model: Qwen/Qwen3-1.7B
+endpoint: http://127.0.0.1:8000/v1
+logical actors: 2
+model replicas: 1
+```
+
+If Pi exposes token/usage statistics easily, record:
+
+```text
+input tokens
+output tokens
+cached tokens
+```
+
+per actor.
+
+Do not add a telemetry stack.
+
+---
+
+# Isolation audit
+
+Add a simple explicit audit step to the PoC.
+
+At startup, print the effective resources/configuration that each actor is receiving:
+
+```text
+actor-a:
+  provider: local-vllm
+  model: Qwen/Qwen3-1.7B
+  workspace: ...
+  runtime root: ...
+  tools: [...]
+  skills: none
+  extensions: none
+  inherited host config: none
+
+actor-b:
+  ...
+```
+
+Do not print secrets.
+
+More importantly, inspect the Pi SDK implementation/documentation enough to ensure these claims are actually true.
+
+If some SDK default implicitly loads host resources, explicitly disable or replace it.
+
+Do not merely assume isolation because custom configuration was supplied.
+
+---
+
+# Failure handling
+
+If one actor fails, let the other finish if practical.
+
+Report both outcomes independently.
+
+Ensure resources held by the Pi SDK are disposed/closed cleanly.
+
+Ctrl-C should terminate the PoC without leaving background agent processes because there should not be agent subprocesses in the first place.
+
+The vLLM server can remain independently running.
+
+---
+
+# README
+
+Keep the README short.
+
+Include:
+
+## Architecture
 
 Explicitly state:
 
-> There are two logical Pi actors but only one loaded Qwen3-1.7B model instance.
+> Two independent Pi SDK agent instances share one Qwen3-1.7B vLLM-Metal inference server.
 
-Explain why.
+And:
 
-### Setup
+> Pi host configuration is intentionally not loaded. Every agent receives a project-defined sterile configuration.
 
-From a fresh Apple Silicon Mac, give exact commands.
+## Running
 
-### Running
-
-Ideally:
+Assuming vLLM is already serving Qwen3:
 
 ```bash
-./scripts/setup.sh
-./scripts/start-server.sh
-./scripts/smoke-test.py
-<one command to run both actors>
+deno task poc
 ```
 
-### Expected result
+That should ideally be the only application command required.
 
-Show representative successful output.
+## Expected result
 
-### Troubleshooting
+Both independent coding tasks succeed concurrently.
 
-Include only failures actually encountered or highly likely ones:
+## Isolation
 
-* x86/Rosetta Python;
-* wrong Python version;
-* model download/auth problems;
-* port already occupied;
-* vLLM-Metal import/startup problem;
-* Pi provider not visible;
-* unsupported OpenAI role/request field;
-* Qwen thinking unexpectedly enabled;
-* memory pressure.
+Document precisely how host Pi configuration loading was prevented.
 
-### Scaling note
+This section matters more than installation instructions.
 
-End with a short architectural note explaining that scaling:
+## Scaling
+
+State:
+
+> Scaling 2 → 20 actors initially means constructing additional isolated Pi SDK agents against the same inference server, not loading additional copies of Qwen3-1.7B.
+
+No discussion of Kubernetes/Ray/etc. beyond that.
+
+---
+
+# Acceptance criteria
+
+Do not stop until all are true:
+
+* [ ] Application runtime is Deno.
+* [ ] Pi is used through its SDK, not RPC or CLI subprocesses.
+* [ ] One vLLM-Metal endpoint serves `Qwen/Qwen3-1.7B`.
+* [ ] Exactly one model replica is required.
+* [ ] Provider/model configuration is constructed locally by the application.
+* [ ] No changes are made to the user's normal Pi configuration.
+* [ ] Neither actor reads normal host Pi configuration.
+* [ ] Neither actor loads host Pi skills/extensions/prompts/sessions.
+* [ ] Actor A and actor B have separate Pi state/config roots.
+* [ ] Actor A and actor B have separate workspaces.
+* [ ] Only minimal filesystem/edit/execute tools are available.
+* [ ] No unnecessary tools or extensions are loaded.
+* [ ] Both actors begin execution concurrently.
+* [ ] Actor A creates a correct `fib.py`.
+* [ ] Actor B creates a correct `prime.py`.
+* [ ] Tests are independently verified by the controller.
+* [ ] Logs clearly distinguish both actors.
+* [ ] Effective model/provider/tool configuration is inspectable.
+* [ ] README explains the hermetic configuration mechanism.
+* [ ] `deno task poc` reproduces the experiment.
+
+---
+
+# Engineering philosophy
+
+Treat each Pi actor as a **disposable, hermetic cognitive process**.
+
+The actor should possess essentially no durable intelligence beyond the context explicitly supplied to it.
+
+The eventual society/control plane—not the individual Pi process—will own:
 
 ```text
-2 → 5 → 20 actors
+identity
+memory
+provenance
+knowledge
+specialization
+coordination
+resource budgets
+institutional state
 ```
 
-should initially mean increasing the number of **Pi client sessions**, not increasing the number of vLLM model replicas.
+Therefore this PoC should deliberately prevent Pi's existing host-level configuration and persistence machinery from becoming hidden state.
 
-The next benchmark after this PoC should therefore be identical infrastructure with configurable:
+The desired abstraction boundary is:
 
 ```text
---actors N
+            future society/control plane
+                       │
+               explicit context
+                       │
+           ┌───────────┴───────────┐
+           │                       │
+      sterile Pi actor        sterile Pi actor
+           │                       │
+           └───────────┬───────────┘
+                       │
+                  shared vLLM
+                       │
+                  Qwen3-1.7B
 ```
 
-rather than adding Ray or another serving layer.
+The important experiment is not "can Pi run twice?"
 
-## Acceptance criteria
+It is:
 
-Do not consider the task complete until all of these pass:
+> Can we cheaply instantiate multiple **hermetic, independently stateful cognitive workers** over a single shared inference substrate, with their entire effective phenotype controlled explicitly by our own program?
 
-* [ ] Machine confirmed native Apple Silicon arm64.
-* [ ] vLLM-Metal installed and importable.
-* [ ] Qwen/Qwen3-1.7B loads successfully.
-* [ ] Exactly one inference server/model instance is running.
-* [ ] OpenAI-compatible single-request smoke test passes.
-* [ ] Raw two-request concurrent smoke test passes.
-* [ ] Pi recognizes the local model/provider.
-* [ ] Pi actor A works independently.
-* [ ] Pi actor B works independently.
-* [ ] Actor A and actor B run concurrently.
-* [ ] Both are backed by the same vLLM server.
-* [ ] Actor A creates and tests `fib.py`.
-* [ ] Actor B creates and tests `prime.py`.
-* [ ] Their files/workspaces do not interfere.
-* [ ] Child processes shut down cleanly.
-* [ ] README reproduces the successful procedure.
-* [ ] Exact installed component versions are recorded.
+Once that invariant is established for two actors, stop.
 
-## Engineering philosophy
-
-This is infrastructure for later experiments in artificial societies / multi-agent coordination.
-
-Therefore:
-
-* keep inference boring;
-* keep actors disposable;
-* keep actor state isolated;
-* make concurrency explicit;
-* retain inspectability;
-* avoid premature abstractions;
-* prefer deterministic machinery around nondeterministic models;
-* do not build the future swarm control plane yet.
-
-The PoC is successful if two independent weak coding agents can operate simultaneously and reliably through one shared local inference substrate.
-
-Once this works, stop.
-
-Do not continue into scheduling, provenance graphs, inter-agent messaging, memory, actor genomes, institutional structures, or RL. Those are the next layer and should be designed only after this substrate is proven.
+Do not implement actor communication, provenance, scheduling, institutional memory, specialization, genomes, or RL yet.
