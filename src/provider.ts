@@ -32,7 +32,10 @@ function modelProfile(modelId: string): ModelProfile {
       chatTemplateKwargs: {
         enable_thinking: { $var: "thinking.enabled" },
       },
-      maxTokens: 16_384,
+      // The coding task completes in a few thousand output tokens. Keeping
+      // this below the model's 32K context leaves BatchedEngine more KV room
+      // for many simultaneous sessions without changing the context window.
+      maxTokens: 4_096,
       supportsThinkingTokenBudget: false,
     };
   }

@@ -26,7 +26,7 @@ For integer intervals, define adjacent precisely: [1, 2] and [3, 4] are adjacent
 
 Create test_intervals.py using only Python's standard library. Import the function with "from intervals import merge_intervals". Keep this test file minimal: use exactly these cases and no extra cases: unsorted chained intervals [(5, 7), (1, 2), (3, 4)] -> [(1, 7)]; overlapping intervals [(1, 10), (2, 6), (8, 12)] -> [(1, 12)]; adjacent intervals [(1, 2), (3, 4)] -> [(1, 4)]; a one-integer gap [(1, 2), (4, 5)] -> [(1, 2), (4, 5)]; negative intervals [(-10, -8), (-5, -1)] -> [(-10, -8), (-5, -1)]; an empty list -> []; input immutability; and invalid intervals [(2, 1)] raising ValueError. Do not use pytest or any third-party package.
 
-IMPORTANT: use one tool call at a time. First write intervals.py and wait for the successful result. Then write test_intervals.py and wait for the successful result. Only then run test_intervals.py with the provided run_python_test tool using the relative path "test_intervals.py". Fix any failures and stop immediately after the test returns exit code 0: do not reread either file, repeat the test, or perform extra verification.`;
+IMPORTANT: do not preamble or inspect the workspace. Begin immediately with exactly this sequence, one tool call at a time: write intervals.py and wait for the successful result; write test_intervals.py and wait for the successful result; run test_intervals.py with the provided run_python_test tool using the relative path "test_intervals.py". Fix any failures and stop immediately after the test returns exit code 0: do not reread either file, repeat the test, or perform extra verification.`;
 
 const controllerVerification = `
 from intervals import merge_intervals
@@ -83,6 +83,7 @@ interface BenchmarkOptions {
   repeats: number;
   timeoutMs: number;
   keepArtifacts: boolean;
+  staggerMs: number;
 }
 
 function formatError(error: unknown): string {
@@ -93,6 +94,14 @@ function parsePositiveInteger(value: string, name: string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 1) {
     throw new Error(`--${name} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function parseNonNegativeInteger(value: string, name: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(`--${name} must be a non-negative integer`);
   }
   return parsed;
 }
@@ -116,6 +125,10 @@ function parseOptions(args: string[]): BenchmarkOptions {
     getValue("timeout-seconds") ?? "300",
     "timeout-seconds",
   );
+  const staggerMs = parseNonNegativeInteger(
+    getValue("stagger-ms") ?? "0",
+    "stagger-ms",
+  );
 
   return {
     workload,
@@ -123,6 +136,7 @@ function parseOptions(args: string[]): BenchmarkOptions {
     repeats,
     timeoutMs: timeoutSeconds * 1_000,
     keepArtifacts: args.includes("--keep"),
+    staggerMs,
   };
 }
 
@@ -310,13 +324,21 @@ async function runWave(
   model: Parameters<typeof createActor>[0]["model"],
   workload: Workload,
   timeoutMs: number,
+  staggerMs: number,
 ): Promise<WaveResult> {
   observedActiveSessions = 0;
   maxObservedActiveSessions = 0;
   const actors = await createWaveActors(root, concurrency, modelRuntime, model);
   const startedAt = performance.now();
   const outcomes = await Promise.all(
-    actors.map((actor) => runSession(actor, taskFor(workload), timeoutMs)),
+    actors.map(async (actor, index) => {
+      if (index > 0 && staggerMs > 0) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, index * staggerMs)
+        );
+      }
+      return await runSession(actor, taskFor(workload), timeoutMs);
+    }),
   );
   if (workload === "programming") {
     for (const actor of actors) {
@@ -404,6 +426,7 @@ async function main(): Promise<void> {
   console.log(`workload: ${options.workload}`);
   console.log(`levels: ${options.levels.join(", ")}`);
   console.log(`repeats: ${options.repeats}`);
+  console.log(`prompt stagger: ${options.staggerMs}ms`);
   console.log(
     options.workload === "programming"
       ? "each session: interval merger, tests, and sequential tool turns"
@@ -424,6 +447,7 @@ async function main(): Promise<void> {
           model,
           options.workload,
           options.timeoutMs,
+          options.staggerMs,
         );
         results.push(result);
         printWave(result);

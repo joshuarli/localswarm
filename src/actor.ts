@@ -50,7 +50,8 @@ const TOOL_NAMES = ["ls", "read", "write", "edit", "run_python_test"] as const;
 
 const CODING_COMPLETION_GUIDANCE = `Coding-task completion discipline:
 - Use paths relative to the actor workspace when calling workspace tools; do not pass absolute host paths.
-- Follow the requested tool order and make the smallest necessary number of tool calls.
+- Start with the first requested write; do not inspect or list the workspace when the task already specifies the files.
+- Follow the requested tool order, keep reasoning and tool arguments concise, and make the smallest necessary number of tool calls.
 - When the required test returns exit code 0, the task is complete. Stop using tools immediately and give a brief final response.
 - Do not reread files, repeat a passing test, or perform extra verification after that successful result.`;
 
