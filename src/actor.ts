@@ -66,6 +66,9 @@ function createSterileResourceLoader(): ResourceLoader {
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
     getAgentsFiles: () => ({ agentsFiles: [] }),
+    // `undefined` tells Pi to build its built-in system prompt, including the
+    // selected tools and their prompt snippets. Only host-loaded custom
+    // prompt resources are suppressed here.
     getSystemPrompt: () => undefined,
     getSystemPromptSource: () => undefined,
     getAppendSystemPrompt: () => [],
@@ -268,7 +271,7 @@ export async function createActor(config: ActorConfig): Promise<Actor> {
   const workspaceRoot = await Deno.realPath(config.workspace);
   const sessionManager = SessionManager.create(workspaceRoot, sessionRoot);
   const settingsManager = SettingsManager.inMemory({
-    defaultThinkingLevel: "off",
+    defaultThinkingLevel: "high",
     compaction: { enabled: false },
     retry: { enabled: false },
   });
@@ -283,7 +286,7 @@ export async function createActor(config: ActorConfig): Promise<Actor> {
     agentDir: configRoot,
     modelRuntime: config.modelRuntime,
     model: config.model,
-    thinkingLevel: "off",
+    thinkingLevel: "high",
     tools: [...TOOL_NAMES],
     customTools,
     resourceLoader,

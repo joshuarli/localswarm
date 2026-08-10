@@ -4,7 +4,7 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 export const PROVIDER_ID = "local-vllm";
 export const MODEL_ID = "Qwen/Qwen3-1.7B";
 export const VLLM_BASE_URL = "http://127.0.0.1:8000/v1";
-export const CONTEXT_WINDOW = 8192;
+export const CONTEXT_WINDOW = 32768;
 
 /**
  * Construct the only model provider used by this PoC.
@@ -37,19 +37,21 @@ export async function createLocalVllmProvider(): Promise<{
         id: MODEL_ID,
         name: MODEL_ID,
         api: "openai-completions",
-        reasoning: false,
+        reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: CONTEXT_WINDOW,
-        maxTokens: 4096,
+        maxTokens: 8192,
         samplingParams: {
-          // This is vLLM's supported Qwen3 switch; it is sent on every
-          // OpenAI-compatible request and avoids /no_think prompt text.
-          enable_thinking: false,
+          // This is vLLM's Qwen3 switch; high reasoning is selected by Pi's
+          // thinking level for each session.
+          enable_thinking: true,
         },
         compat: {
           supportsDeveloperRole: false,
           supportsReasoningEffort: false,
+          supportsThinkingTokenBudget: true,
+          thinkingFormat: "qwen",
           supportsUsageInStreaming: true,
           maxTokensField: "max_tokens",
         },
