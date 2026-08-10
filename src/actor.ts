@@ -211,7 +211,25 @@ function createWorkspaceToolDefinitions(
       }),
     }),
     execute: async (_toolCallId, params, signal) => {
-      const safePath = await policy.existing(join(workspaceRoot, params.path));
+      // Pi may execute a model-emitted batch of write and test calls
+      // concurrently. Allow a test call to observe a sibling write that is
+      // already in flight instead of turning that valid batch into a race.
+      let safePath: string | undefined;
+      let lastError: unknown;
+      const deadline = performance.now() + 5_000;
+      while (performance.now() < deadline) {
+        try {
+          safePath = await policy.existing(join(workspaceRoot, params.path));
+          break;
+        } catch (error) {
+          lastError = error;
+          if (!(error instanceof Deno.errors.NotFound)) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      }
+      if (!safePath) {
+        throw lastError ?? new Error(`Test file not found: ${params.path}`);
+      }
       if (!safePath.endsWith(".py")) {
         throw new Error("run_python_test only accepts .py files");
       }
