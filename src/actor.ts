@@ -38,15 +38,37 @@ export interface ActorConfig {
   runtimeRoot: string;
   modelRuntime: ModelRuntime;
   model: Model<"openai-completions">;
+  /**
+   * Explicit tool allowlist for this workload. Omitting it keeps the full
+   * sterile coding surface used by the two-actor PoC.
+   */
+  toolNames?: readonly ActorToolName[];
+  /** Stop the model turn immediately after the required Python test passes. */
+  stopAfterSuccessfulTest?: boolean;
 }
+
+export type ActorToolName =
+  | "ls"
+  | "read"
+  | "write"
+  | "edit"
+  | "write_interval_files"
+  | "run_python_test";
 
 export interface Actor {
   config: ActorConfig;
   session: AgentSession;
-  toolNames: readonly string[];
+  toolNames: readonly ActorToolName[];
+  hasSuccessfulTest: () => boolean;
 }
 
-const TOOL_NAMES = ["ls", "read", "write", "edit", "run_python_test"] as const;
+const ALL_TOOL_NAMES = [
+  "ls",
+  "read",
+  "write",
+  "edit",
+  "run_python_test",
+] as const satisfies readonly ActorToolName[];
 
 const CODING_COMPLETION_GUIDANCE = `Coding-task completion discipline:
 - Use paths relative to the actor workspace when calling workspace tools; do not pass absolute host paths.
@@ -154,6 +176,8 @@ function textResult(text: string, details: unknown = {}): {
 function createWorkspaceToolDefinitions(
   workspace: string,
   workspaceRoot: string,
+  selectedToolNames: readonly ActorToolName[],
+  onSuccessfulTest: () => void,
 ): ToolDefinition<any, any, any>[] {
   const policy = new WorkspacePathPolicy(workspaceRoot);
 
@@ -265,6 +289,7 @@ function createWorkspaceToolDefinitions(
         const stdout = new TextDecoder().decode(output.stdout);
         const stderr = new TextDecoder().decode(output.stderr);
         const text = `${stdout}${stderr ? `\n${stderr}` : ""}`.trim();
+        if (output.code === 0) onSuccessfulTest();
         return textResult(
           `${text || "(no output)"}\nexit code: ${output.code}`,
           { exitCode: output.code },
@@ -276,13 +301,46 @@ function createWorkspaceToolDefinitions(
     },
   });
 
-  return [
+  const writeIntervalFiles = defineTool({
+    name: "write_interval_files",
+    label: "Write interval files",
+    description:
+      "Write the two files required by the interval-merger task in one coding step. The implementation becomes intervals.py and the tests become test_intervals.py.",
+    promptSnippet: "Write intervals.py and test_intervals.py",
+    parameters: Type.Object({
+      implementation: Type.String({
+        description: "Complete contents for intervals.py",
+      }),
+      tests: Type.String({
+        description: "Complete contents for test_intervals.py",
+      }),
+    }),
+    execute: async (_toolCallId, params) => {
+      await Deno.writeTextFile(
+        await policy.creatable(join(workspaceRoot, "intervals.py")),
+        params.implementation,
+      );
+      await Deno.writeTextFile(
+        await policy.creatable(join(workspaceRoot, "test_intervals.py")),
+        params.tests,
+      );
+      return textResult("Successfully wrote intervals.py and test_intervals.py", {
+        paths: ["intervals.py", "test_intervals.py"],
+      });
+    },
+  });
+
+  const allTools = [
     createLsToolDefinition(workspace, { operations: lsOperations }),
     createReadToolDefinition(workspace, { operations: readOperations }),
     createWriteToolDefinition(workspace, { operations: writeOperations }),
     createEditToolDefinition(workspace, { operations: editOperations }),
+    writeIntervalFiles,
     runPythonTest,
   ];
+  return allTools.filter(({ name }) =>
+    selectedToolNames.includes(name as ActorToolName)
+  );
 }
 
 export async function createActor(config: ActorConfig): Promise<Actor> {
@@ -297,6 +355,9 @@ export async function createActor(config: ActorConfig): Promise<Actor> {
   ]);
 
   const workspaceRoot = await Deno.realPath(config.workspace);
+  const toolNames = [...(config.toolNames ?? ALL_TOOL_NAMES)];
+  let successfulTest = false;
+  let stopSession: (() => void) | undefined;
   const sessionManager = SessionManager.create(workspaceRoot, sessionRoot);
   const settingsManager = SettingsManager.inMemory({
     defaultThinkingLevel: "high",
@@ -307,6 +368,15 @@ export async function createActor(config: ActorConfig): Promise<Actor> {
   const customTools = createWorkspaceToolDefinitions(
     config.workspace,
     workspaceRoot,
+    toolNames,
+    () => {
+      successfulTest = true;
+      if (config.stopAfterSuccessfulTest) {
+        // Let Pi finish recording the tool result before stopping the next
+        // model turn. The benchmark treats this controlled abort as success.
+        setTimeout(() => stopSession?.(), 50);
+      }
+    },
   );
 
   const { session } = await createAgentSession({
@@ -315,12 +385,18 @@ export async function createActor(config: ActorConfig): Promise<Actor> {
     modelRuntime: config.modelRuntime,
     model: config.model,
     thinkingLevel: "high",
-    tools: [...TOOL_NAMES],
+    tools: [...toolNames],
     customTools,
     resourceLoader,
     settingsManager,
     sessionManager,
   });
 
-  return { config, session, toolNames: TOOL_NAMES };
+  stopSession = () => void session.abort();
+  return {
+    config,
+    session,
+    toolNames,
+    hasSuccessfulTest: () => successfulTest,
+  };
 }

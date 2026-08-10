@@ -1,6 +1,10 @@
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type Actor, createActor } from "./actor.ts";
+import {
+  type Actor,
+  type ActorToolName,
+  createActor,
+} from "./actor.ts";
 import {
   createLocalVllmProvider,
   MODEL_ID,
@@ -17,16 +21,25 @@ type Workload = "programming" | "ready";
 
 const readyTask =
   "Reply with exactly READY and no additional text. Do not call any tools.";
+
+// The programming task's contract requires one multi-file write and the test runner.
+// Keeping discovery/edit tools out of this session is intentional: their
+// schemas become prompt tokens and invite extra turns without adding a needed
+// capability to this fixed workload.
+const programmingToolNames = [
+  "write_interval_files",
+  "run_python_test",
+] as const satisfies
+  readonly ActorToolName[];
+
 const programmingTask =
-  `Work only inside this actor workspace. Use the provided filesystem and test tools; do not merely describe a solution.
+  `Work only inside this actor workspace. Implement and test an inclusive integer interval merger in Python using only the standard library.
 
-Implement intervals.py with a merge_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]] function. Treat each interval as inclusive. Sort the input by start, merge overlapping or adjacent intervals, return a new list, and raise ValueError when any interval has start greater than end. Do not mutate the input and use only Python's standard library.
+Write intervals.py with merge_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]. It must return a new list sorted by start, merge overlapping intervals and adjacent integer intervals ([1,2] with [3,4]), leave a one-integer gap unmerged ([1,2] with [4,5]), preserve the input, and raise ValueError when start > end.
 
-For integer intervals, define adjacent precisely: [1, 2] and [3, 4] are adjacent and must merge because there is no integer gap; [1, 2] and [4, 5] are not adjacent because 3 is missing.
+Write test_intervals.py importing with "from intervals import merge_intervals". Test exactly: unsorted chained [(5,7),(1,2),(3,4)] -> [(1,7)]; overlapping [(1,10),(2,6),(8,12)] -> [(1,12)]; adjacent [(1,2),(3,4)] -> [(1,4)]; gap [(1,2),(4,5)] unchanged; negative [(-10,-8),(-5,-1)] unchanged; empty input; input immutability; and [(2,1)] raises ValueError. Use no third-party packages.
 
-Create test_intervals.py using only Python's standard library. Import the function with "from intervals import merge_intervals". Keep this test file minimal: use exactly these cases and no extra cases: unsorted chained intervals [(5, 7), (1, 2), (3, 4)] -> [(1, 7)]; overlapping intervals [(1, 10), (2, 6), (8, 12)] -> [(1, 12)]; adjacent intervals [(1, 2), (3, 4)] -> [(1, 4)]; a one-integer gap [(1, 2), (4, 5)] -> [(1, 2), (4, 5)]; negative intervals [(-10, -8), (-5, -1)] -> [(-10, -8), (-5, -1)]; an empty list -> []; input immutability; and invalid intervals [(2, 1)] raising ValueError. Do not use pytest or any third-party package.
-
-IMPORTANT: do not preamble or inspect the workspace. Begin immediately with exactly this sequence, one tool call at a time: write intervals.py and wait for the successful result; write test_intervals.py and wait for the successful result; run test_intervals.py with the provided run_python_test tool using the relative path "test_intervals.py". Fix any failures and stop immediately after the test returns exit code 0: do not reread either file, repeat the test, or perform extra verification.`;
+Keep both source strings concise: no docstrings, comments, explanatory prose, or extra tests. Do not preamble, inspect, reread, or add extra verification. Call write_interval_files once with the complete implementation and test source strings and wait for its successful result. Then call run_python_test with path "test_intervals.py". Stop immediately after exit code 0; only fix a failure if the test reports one.`;
 
 const controllerVerification = `
 from intervals import merge_intervals
@@ -84,6 +97,7 @@ interface BenchmarkOptions {
   timeoutMs: number;
   keepArtifacts: boolean;
   staggerMs: number;
+  admissionConcurrency: number;
 }
 
 function formatError(error: unknown): string {
@@ -112,7 +126,7 @@ function parseOptions(args: string[]): BenchmarkOptions {
     return args.find((arg) => arg.startsWith(prefix))?.slice(prefix.length);
   };
 
-  const levels = (getValue("levels") ?? "1,2,4,6,8,10,12,14,16")
+  const levels = (getValue("levels") ?? "1,2,4,6,8")
     .split(",")
     .map((value) => parsePositiveInteger(value, "levels"));
   const uniqueLevels = [...new Set(levels)].sort((a, b) => a - b);
@@ -129,6 +143,10 @@ function parseOptions(args: string[]): BenchmarkOptions {
     getValue("stagger-ms") ?? "0",
     "stagger-ms",
   );
+  const admissionConcurrency = parseNonNegativeInteger(
+    getValue("admission-concurrency") ?? "0",
+    "admission-concurrency",
+  );
 
   return {
     workload,
@@ -137,6 +155,7 @@ function parseOptions(args: string[]): BenchmarkOptions {
     timeoutMs: timeoutSeconds * 1_000,
     keepArtifacts: args.includes("--keep"),
     staggerMs,
+    admissionConcurrency,
   };
 }
 
@@ -240,6 +259,7 @@ async function runSession(
   actor: Actor,
   task: string,
   timeoutMs: number,
+  stopAfterSuccessfulTest: boolean,
 ): Promise<SessionOutcome> {
   const startedAt = performance.now();
   let status: SessionOutcome["status"] = "success";
@@ -263,17 +283,21 @@ async function runSession(
       .find((message) => message.role === "assistant") as
         | { stopReason?: string; errorMessage?: string }
         | undefined;
+    const successfulTest = stopAfterSuccessfulTest &&
+      actor.hasSuccessfulTest();
     if (
-      lastAssistant?.stopReason === "error" ||
-      lastAssistant?.stopReason === "aborted"
+      (!successfulTest && lastAssistant?.stopReason === "error") ||
+      (!successfulTest && lastAssistant?.stopReason === "aborted")
     ) {
       status = "failure";
       error = lastAssistant.errorMessage ??
         `assistant stopped with ${lastAssistant.stopReason}`;
     }
   } catch (caught) {
-    status = "failure";
-    error = formatError(caught);
+    if (!(stopAfterSuccessfulTest && actor.hasSuccessfulTest())) {
+      status = "failure";
+      error = formatError(caught);
+    }
   } finally {
     clearTimeout(timeout);
     activeSessions.delete(actor.session);
@@ -296,11 +320,36 @@ async function runSession(
   };
 }
 
+function createAdmissionLimiter(limit: number): {
+  acquire: () => Promise<() => void>;
+} {
+  let available = limit;
+  const waiters: Array<() => void> = [];
+  return {
+    acquire: async () => {
+      if (available > 0) {
+        available -= 1;
+      } else {
+        await new Promise<void>((resolve) => waiters.push(resolve));
+      }
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        const next = waiters.shift();
+        if (next) next();
+        else available += 1;
+      };
+    },
+  };
+}
+
 async function createWaveActors(
   root: string,
   concurrency: number,
   modelRuntime: Parameters<typeof createActor>[0]["modelRuntime"],
   model: Parameters<typeof createActor>[0]["model"],
+  toolNames: readonly ActorToolName[] | undefined,
 ): Promise<Actor[]> {
   return await Promise.all(
     Array.from({ length: concurrency }, (_, index) => {
@@ -311,6 +360,9 @@ async function createWaveActors(
         runtimeRoot: join(root, "runtime", id),
         modelRuntime,
         model,
+        ...(toolNames
+          ? { toolNames, stopAfterSuccessfulTest: true }
+          : {}),
       });
     }),
   );
@@ -325,10 +377,22 @@ async function runWave(
   workload: Workload,
   timeoutMs: number,
   staggerMs: number,
+  admissionConcurrency: number,
 ): Promise<WaveResult> {
   observedActiveSessions = 0;
   maxObservedActiveSessions = 0;
-  const actors = await createWaveActors(root, concurrency, modelRuntime, model);
+  const actors = await createWaveActors(
+    root,
+    concurrency,
+    modelRuntime,
+    model,
+    workload === "programming" ? programmingToolNames : undefined,
+  );
+  const admission = createAdmissionLimiter(
+    admissionConcurrency > 0
+      ? Math.min(admissionConcurrency, concurrency)
+      : concurrency,
+  );
   const startedAt = performance.now();
   const outcomes = await Promise.all(
     actors.map(async (actor, index) => {
@@ -337,7 +401,17 @@ async function runWave(
           setTimeout(resolve, index * staggerMs)
         );
       }
-      return await runSession(actor, taskFor(workload), timeoutMs);
+      const release = await admission.acquire();
+      try {
+        return await runSession(
+          actor,
+          taskFor(workload),
+          timeoutMs,
+          workload === "programming",
+        );
+      } finally {
+        release();
+      }
     }),
   );
   if (workload === "programming") {
@@ -428,8 +502,13 @@ async function main(): Promise<void> {
   console.log(`repeats: ${options.repeats}`);
   console.log(`prompt stagger: ${options.staggerMs}ms`);
   console.log(
+    `session admission: ${options.admissionConcurrency > 0
+      ? options.admissionConcurrency
+      : "unbounded"}`,
+  );
+  console.log(
     options.workload === "programming"
-      ? "each session: interval merger, tests, and sequential tool turns"
+      ? "each session: interval merger, one interval-file write, and one test"
       : "each session: isolated Pi state and one deterministic response",
   );
 
@@ -448,6 +527,7 @@ async function main(): Promise<void> {
           options.workload,
           options.timeoutMs,
           options.staggerMs,
+          options.admissionConcurrency,
         );
         results.push(result);
         printWave(result);

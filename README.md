@@ -1,13 +1,16 @@
-# Minimal Pi concurrency harness for vLLM-Metal and oMLX
+# Minimal Pi concurrency harness for oMLX Laguna
+
+Historical alternate-server setup, profiles, and results are in
+[`VLLM.md`](VLLM.md). This README stays focused on the Laguna/oMLX path.
 
 ## Architecture
 
-Two independent Pi SDK agent instances share one vLLM-Metal inference server at
-`http://127.0.0.1:8000/v1`. The controller creates both agents in Deno and
-starts their prompts concurrently; the model is loaded once by the separately
-running vLLM server. Agents use a 32,768-token context window and high
-reasoning. The default model is `Qwen/Qwen3-1.7B`; set
-`LOCAL_VLLM_MODEL_ID` to benchmark another model without changing the harness.
+Two independent Pi SDK agent instances share one OpenAI-compatible inference
+server at `http://127.0.0.1:8000/v1`. The controller creates both agents in
+Deno and starts their prompts concurrently; the model is loaded once by the
+separately running server. Laguna uses a 32,768-token context window and high
+reasoning. Set `LOCAL_VLLM_MODEL_ID` to select the served model without
+changing the harness.
 
 Pi host configuration is intentionally not loaded. Every agent receives a
 project-defined sterile configuration: an in-memory `ModelRuntime` credential
@@ -16,50 +19,25 @@ store with `modelsPath: null`, an in-memory `SettingsManager`, a no-discovery
 `.runtime/<actor>/sessions`. No `DefaultResourceLoader` or default Pi directory
 is instantiated.
 
-The agents receive only Pi's `ls`, `read`, `write`, and `edit` tools with
-workspace-bound filesystem operations, plus a wrapper that runs one `python3`
-test inside that workspace. The wrappers reject paths that escape the workspace,
-including symlink escapes. Host-loaded skills, extensions, prompt templates, and
-sessions are absent; Pi's built-in system prompt and selected-tool snippets are
-still present. The sterile loader also appends a small coding completion policy:
-use workspace-relative paths, follow the requested tool order, and stop
-immediately after a required test returns exit code 0. This preserves Pi's
-built-in prompt while preventing a verified task from turning into an
-unnecessary reread/retry loop.
-
-High-thinking mode is selected through Pi's `thinkingLevel: "high"` and the
-model-specific compatibility profile; no reasoning directive is embedded in
-user prompts. Qwen models use vLLM's `enable_thinking` request parameter.
-
-The tested model profiles are model-specific: Qwen3.5 uses its Qwen thinking
-format and calibrated sampling, while GLM-4.7-Flash uses its chat-template
-thinking flags, preserved thinking history, `temperature=0.7`, `top_p=1.0`, and
-a 16,384-token output limit for coding work. The GLM profile uses vLLM's
-`glm47` tool parser and `glm45` reasoning parser.
-
-For the base Qwen3 model, use vLLM's Hermes parser. Qwen3-1.7B emits the
-Hermes-style JSON tool-call envelope; `qwen3_xml` is intended for Qwen3-Coder
-models and does not parse this model's calls:
-
-```bash
-vllm serve Qwen/Qwen3-1.7B \
-  --host 127.0.0.1 \
-  --port 8000 \
-  --max-model-len 32768 \
-  --enable-auto-tool-choice \
-  --tool-call-parser hermes \
-  --reasoning-parser qwen3
-```
+The agents receive workspace-bound filesystem operations and a wrapper that
+runs one `python3` test inside that workspace. The wrappers reject paths that
+escape the workspace, including symlink escapes. Host-loaded skills,
+extensions, prompt templates, and sessions are absent; Pi's built-in system
+prompt and selected-tool snippets are still present. The sterile loader also
+appends a small coding completion policy: use workspace-relative paths, follow
+the requested tool order, and stop immediately after a required test returns
+exit code 0. This preserves Pi's built-in prompt while preventing a verified
+task from turning into an unnecessary reread/retry loop.
 
 ## Running
 
-Assuming vLLM-Metal is already serving the required model:
+Assuming oMLX is already serving the required model:
 
 ```bash
 deno task poc
 ```
 
-The controller does not start vLLM or create another model instance.
+The controller does not start oMLX or create another model instance.
 
 To measure the session concurrency this server can sustain:
 
@@ -69,36 +47,18 @@ deno task benchmark
 
 The benchmark uses one shared model replica and a fresh isolated workspace per
 session. By default each session implements and tests an interval-merging
-utility, exercising high reasoning, filesystem tools, test execution, and
-multiple sequential Pi turns. It sweeps 1, 2, 4, 6, 8, 10, 12, 14, and 16
+utility, exercising high reasoning, the required filesystem/test tools, test
+execution, and multiple sequential Pi turns. The programming workload exposes
+only `write_interval_files` and `run_python_test` so every session carries the
+smallest tool surface needed by its fixed task. It sweeps 1, 2, 4, 6, and 8
 concurrent sessions, stopping at the first failed level. Use `--workload=ready`
 for a deterministic session-overhead control, `--repeats=2` for repeated runs,
 `--stagger-ms=1000` to spread prompt admission across a wave, or
-`--levels=12,14,16` to probe the boundary. The reported maximum is an
-empirical session-workload result, not a vLLM capacity guarantee.
-
-For the tested alternatives, start vLLM with the matching parser configuration:
-
-```bash
-# Qwen3.5-9B, including the OptiQ checkpoint
-vllm serve mlx-community/Qwen3.5-9B-4bit \
-  --host 127.0.0.1 --port 8000 --max-model-len 32768 \
-  --language-model-only --enable-auto-tool-choice \
-  --tool-call-parser qwen3_coder --reasoning-parser qwen3
-
-# GLM-4.7-Flash (30B-A3B sparse MoE)
-vllm serve mlx-community/GLM-4.7-Flash-4bit \
-  --host 127.0.0.1 --port 8000 --max-model-len 32768 \
-  --language-model-only --enable-auto-tool-choice \
-  --tool-call-parser glm47 --reasoning-parser glm45
-```
-
-Then select the model in the controller, for example:
-
-```bash
-LOCAL_VLLM_MODEL_ID=mlx-community/GLM-4.7-Flash-4bit \
-  deno task benchmark --levels=1,2,3 --timeout-seconds=300 --keep
-```
+`--levels=10,12,14,16` to probe beyond the reliable coding boundary. For a
+larger logical wave, use `--admission-concurrency=8` to bound active KV state;
+the benchmark reports both logical concurrency and active peak. The reported
+maximum is an empirical session-workload result, not a general server capacity
+guarantee.
 
 ### oMLX and Laguna XS 2.1
 
@@ -119,7 +79,7 @@ Start the server with a request cap appropriate to the wave being measured:
 omlx serve \
   --model-dir ~/.omlx/models \
   --host 127.0.0.1 --port 8000 \
-  --max-concurrent-requests 16 \
+  --max-concurrent-requests 8 \
   --memory-guard-gb 56 \
   --no-cache
 ```
@@ -128,9 +88,9 @@ omlx serve \
 MLX-LM continuous batching. Laguna's checkpoint metadata advertises a DFlash
 speculative configuration, but oMLX's default setting is DFlash disabled. The
 experiment log confirmed `BatchedEngine loaded`, with no DFlash engine. The
-Laguna provider keeps the 32,768-token context and high thinking, but caps
-per-request generation at 4,096 tokens because this coding task completes in a
-few thousand output tokens and a smaller cap leaves more KV room for batching.
+Laguna provider keeps the 32,768-token context and high thinking, and allows
+up to 4,096 generated tokens so high-thinking tool calls are not truncated. The
+server's eight-request cap remains the working-set guardrail.
 Select Laguna in the Pi harness as follows:
 
 ```bash
@@ -141,24 +101,7 @@ LOCAL_VLLM_MODEL_ID=Laguna-XS-2.1-5bit \
 The checkpoint is [Laguna-XS-2.1-5bit](https://huggingface.co/mlx-community/Laguna-XS-2.1-5bit),
 and the server is [oMLX](https://github.com/jundot/omlx).
 
-## Current observed ceiling
-
-On the Apple M1 Max with 64 GB RAM, using vLLM-Metal, a 32,768-token context,
-high thinking, the full Pi system/tool prompt, and a 300-second per-session
-deadline, the independent interval-merging programming workload produced:
-
-| Model | c1 | c2 | c3 | Reliable coding ceiling |
-| --- | ---: | ---: | ---: | ---: |
-| `mlx-community/Qwen3.5-9B-4bit` | Pass, 127s | Pass, 231s | Fail, 300s | **2** |
-| `mlx-community/Qwen3.5-9B-OptiQ-4bit` | Pass, 173s | Pass, 286s | Fail, 300s | **2** |
-| `mlx-community/GLM-4.7-Flash-4bit` | Fail, 300s | not run | not run | **0** |
-
-The current practical ceiling is therefore **2 simultaneous full coding
-sessions** with the two Qwen3.5-9B checkpoints. OptiQ is a calibrated
-mixed-precision variant of the same base model; it did not improve the
-concurrency ceiling in this workload. GLM-4.7-Flash is a 30B-A3B sparse MoE:
-vLLM-metal loaded it successfully and parsed tool calls, but the high-thinking
-coding agent did not complete one reliable session within the deadline.
+## Current observed Laguna behavior
 
 Laguna initially timed out at c1 after 300 seconds, despite completing the
 implementation and tests. The trace showed 17 valid tool-call turns followed
@@ -169,9 +112,18 @@ lower reasoning setting. A direct tool smoke returned a structured `write_file`
 call, and oMLX reported a 21.5--21.9 GB loaded model with the standard
 `BatchedEngine`.
 
-At full coding c16, all 16 sessions hit the 300-second deadline. oMLX reached
-about 45 GB during the wave against a 51.8 GB Metal ceiling, then recovered;
-the failure was decode throughput under batching, not model-load failure.
+At full coding c16 with the original five-tool session surface, all 16 sessions
+hit the 300-second deadline. oMLX reached about 45 GB during the wave against a
+51.8 GB Metal ceiling, then recovered; the failure was admission/decode
+throughput under batching, not model-load failure. The current benchmark
+narrows that fixed programming workload to `write_interval_files` and
+`run_python_test`, with one multi-file write, to reduce each session's prompt
+and tool-choice footprint. High-thinking c8 now passes at the safe eight-request
+server cap: 8/8 sessions completed, workspace and controller verification
+passed, wall time was 242.3s, and active peak was 8. Unbounded c16 remains
+outside the reliable boundary; use `--admission-concurrency=8` only when
+measuring a larger logical wave in bounded physical batches, and treat its wall
+time separately from true c16 simultaneity.
 
 Attempts to make full coding work at c32 were stopped early after no actor had
 received a first model response: the original 16,384-token output profile made
@@ -194,23 +146,7 @@ These short controls do not represent 32 full 32K coding workers. They do show
 that Pi session startup and oMLX batching are healthy well beyond the two-agent
 coding ceiling. The c48 wave triggered hard-memory pressure/reclaim and did not
 complete within the control deadline. The full coding workload remains the
-meaningful reliability measure: tuned c1 is reliable, while c16 is not.
-
-An apples-to-apples vLLM timing for Laguna was not available. vLLM 0.26.0
-recognizes `LagunaForCausalLM`, but its vLLM-Metal MLX loader does not include
-`mlx_lm.models.laguna`, so the local MLX checkpoint fails during engine startup
-before any inference. A native compatible Laguna checkpoint or a Laguna patch
-integrated into the vLLM-Metal environment would be required for comparison.
-
-As a serving-capacity control, GLM passed the deterministic `READY` workload at
-1, 2, 4, 8, 12, 16, 18, and 20 concurrent Pi sessions. These are short
-requests and do not reserve a full 32,768-token KV sequence per session, so they
-must not be interpreted as 20 full coding workers. vLLM reported 608,176 KV
-tokens for GLM, or a theoretical **18.56** full-length requests. The
-corresponding figures were 1,286,888 tokens / **39.27** requests for stock
-Qwen3.5-9B and 1,228,303 / **37.48** for OptiQ. The gap between these cache
-figures and the coding ceiling is model/tool-turn quality and decode
-throughput, not a RAM OOM.
+meaningful reliability measure: high-thinking c8 is reliable, while c16 is not.
 
 ## Expected result
 
@@ -242,8 +178,5 @@ Deleting or radically changing `~/.pi` therefore has zero effect on this PoC.
 
 Scaling means constructing additional isolated Pi SDK agents against the same
 inference server, not loading additional copies of the selected model. With a
-32k context target, vLLM's KV cache and decode throughput—not the number of
-Deno actor objects—are the expected first capacity constraints. Sparse MoE
-reduces active compute, but the full model weights and model-specific backend
-support still matter; GLM fit in memory here without translating that into a
-reliable coding-worker gain.
+32k context target, the server's KV working set and decode throughput—not the
+number of Deno actor objects—are the expected first capacity constraints.

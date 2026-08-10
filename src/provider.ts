@@ -32,9 +32,9 @@ function modelProfile(modelId: string): ModelProfile {
       chatTemplateKwargs: {
         enable_thinking: { $var: "thinking.enabled" },
       },
-      // The coding task completes in a few thousand output tokens. Keeping
-      // this below the model's 32K context leaves BatchedEngine more KV room
-      // for many simultaneous sessions without changing the context window.
+      // High-thinking coding turns can spend most of 2K before emitting a
+      // complete structured tool call. Keep enough headroom for the required
+      // write call; the server's eight-request cap remains the KV guardrail.
       maxTokens: 4_096,
       supportsThinkingTokenBudget: false,
     };
