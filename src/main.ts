@@ -88,8 +88,8 @@ async function runActor(actor: Actor, task: string): Promise<ActorOutcome> {
   let error: string | undefined;
   try {
     await actor.session.prompt(task, { expandPromptTemplates: false });
-    const lastAssistant = [...actor.session.messages]
-      .reverse()
+    const lastAssistant = actor.session.messages
+      .toReversed()
       .find((message) => message.role === "assistant") as
         | { stopReason?: string; errorMessage?: string }
         | undefined;
@@ -148,7 +148,7 @@ async function findTestFiles(
     }
   }
   await visit(root);
-  return testFiles.sort();
+  return testFiles.toSorted();
 }
 
 async function verifyPythonTest(
@@ -213,6 +213,8 @@ async function verifyActor(
   }
 
   for (const testFile of testFiles) {
+    // Tests share one workspace and must run in a deterministic order.
+    // oxlint-disable-next-line no-await-in-loop
     const failure = await verifyPythonTest(root, testFile);
     if (failure) {
       return {

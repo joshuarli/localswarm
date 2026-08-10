@@ -1,13 +1,20 @@
 {
+  "nodeModulesDir": "auto",
+  "allowScripts": ["npm:oxfmt", "npm:oxlint"],
   "imports": {
     "@earendil-works/pi-ai": "npm:@earendil-works/pi-ai@0.84.1",
     "@earendil-works/pi-coding-agent": "npm:@earendil-works/pi-coding-agent@0.84.1",
+    "oxfmt": "npm:oxfmt@0.62.0",
+    "oxlint": "npm:oxlint@1.77.0",
     "typebox": "npm:typebox@1.3.7"
   },
   "tasks": {
     "poc": "deno run --no-prompt --allow-read --allow-write=. --allow-net=127.0.0.1 --allow-run=python3 --allow-env --allow-sys=homedir,uid src/main.ts",
     "benchmark": "deno run --no-prompt --allow-read --allow-write=. --allow-net=127.0.0.1 --allow-run=python3,memory_pressure --allow-env --allow-sys=homedir,uid src/benchmark.ts",
-    "check": "deno check src/main.ts src/actor.ts src/provider.ts src/benchmark.ts src/admission.ts src/admission_test.ts",
-    "test": "deno test src/admission_test.ts"
+    "check": "deno check src/main.ts src/actor.ts src/provider.ts src/benchmark.ts src/admission.ts src/admission-test.ts",
+    "test": "deno test src/admission-test.ts",
+    "format": "deno run --no-prompt --allow-read --allow-write=. --allow-env --allow-ffi oxfmt src deno.json .oxfmtrc.json .oxlintrc.json",
+    "format:check": "deno run --no-prompt --allow-read --allow-env --allow-ffi oxfmt --check src deno.json .oxfmtrc.json .oxlintrc.json",
+    "lint": "deno run --no-prompt --allow-read --allow-env --allow-ffi oxlint --deny-warnings --max-warnings=0 src"
   }
 }

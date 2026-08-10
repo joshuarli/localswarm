@@ -13,14 +13,12 @@ import {
   SessionManager,
   SettingsManager,
   type ToolDefinition,
+  type EditOperations,
+  type LsOperations,
+  type ReadOperations,
+  type WriteOperations,
 } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
-import type {
-  EditOperations,
-  LsOperations,
-  ReadOperations,
-  WriteOperations,
-} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
   basename,
@@ -140,8 +138,11 @@ class WorkspacePathPolicy {
 
     while (true) {
       try {
+        // Walk upward one directory at a time so symlink checks cover every
+        // existing ancestor before reconstructing the creatable path.
+        // oxlint-disable-next-line no-await-in-loop
         const canonicalBase = await Deno.realPath(current);
-        const candidate = join(canonicalBase, ...missingComponents.reverse());
+        const candidate = join(canonicalBase, ...missingComponents.toReversed());
         return this.assertInside(candidate);
       } catch (error) {
         if (!(error instanceof Deno.errors.NotFound)) {
@@ -178,7 +179,7 @@ function createWorkspaceToolDefinitions(
   workspaceRoot: string,
   selectedToolNames: readonly ActorToolName[],
   onSuccessfulTest: () => void,
-): ToolDefinition<any, any, any>[] {
+): ToolDefinition[] {
   const policy = new WorkspacePathPolicy(workspaceRoot);
 
   const readOperations: ReadOperations = {
@@ -253,12 +254,16 @@ function createWorkspaceToolDefinitions(
       const deadline = performance.now() + 5_000;
       while (performance.now() < deadline) {
         try {
+          // The write and test calls may be concurrent; each retry must observe
+          // the previous filesystem state before checking again.
+          // oxlint-disable-next-line no-await-in-loop
           safePath = await policy.existing(join(workspaceRoot, params.path));
           break;
         } catch (error) {
           lastError = error;
           if (!(error instanceof Deno.errors.NotFound)) throw error;
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          // oxlint-disable-next-line no-await-in-loop
+          await new Promise((wake) => setTimeout(wake, 50));
         }
       }
       if (!safePath) {
@@ -338,9 +343,12 @@ function createWorkspaceToolDefinitions(
     writeIntervalFiles,
     runPythonTest,
   ];
+  // Pi's customTools API erases each schema to a heterogeneous ToolDefinition
+  // array. Every member here is constructed by Pi's own tool factories or the
+  // typed definitions above, so this cast is limited to that API boundary.
   return allTools.filter(({ name }) =>
     selectedToolNames.includes(name as ActorToolName)
-  );
+  ) as unknown as ToolDefinition[];
 }
 
 export async function createActor(config: ActorConfig): Promise<Actor> {

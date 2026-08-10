@@ -51,6 +51,8 @@ export function createAutoAdmissionLimiter(
       while (waiters.length > 0 && active < options.maxConcurrency) {
         let freePercent: number | undefined;
         try {
+          // Each probe must observe the previous admission before the next one.
+          // oxlint-disable-next-line no-await-in-loop
           freePercent = await options.freeMemoryPercent();
         } catch {
           freePercent = undefined;
@@ -60,7 +62,8 @@ export function createAutoAdmissionLimiter(
             Math.min(options.maxConcurrency, options.fallbackMaxConcurrency)
           : freePercent < options.freeMemoryFloorPercent;
         if (atMemoryLimit) {
-          await new Promise((resolve) => setTimeout(resolve, options.settleMs));
+          // oxlint-disable-next-line no-await-in-loop
+          await new Promise((wake) => setTimeout(wake, options.settleMs));
           continue;
         }
 
@@ -69,7 +72,8 @@ export function createAutoAdmissionLimiter(
           options.settleMs - (performance.now() - lastAdmissionAt),
         );
         if (waitMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          // oxlint-disable-next-line no-await-in-loop
+          await new Promise((wake) => setTimeout(wake, waitMs));
         }
         const resolve = waiters.shift();
         if (!resolve) break;

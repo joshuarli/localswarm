@@ -1,0 +1,38 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/refs/heads/main/npm/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "perf": "error",
+    "suspicious": "error"
+  },
+  "plugins": [
+    "typescript",
+    "unicorn",
+    "oxc",
+    "import"
+  ],
+  "env": {
+    "es2021": true
+  },
+  "globals": {
+    "Deno": "readonly"
+  },
+  "ignorePatterns": [
+    "deno.lock",
+    "node_modules/**",
+    ".runtime/**"
+  ],
+  "options": {
+    "typeAware": false,
+    "typeCheck": false,
+    "maxWarnings": 0,
+    "reportUnusedDisableDirectives": "error"
+  },
+  "rules": {
+    "no-console": "off",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-floating-promises": "error",
+    "import/no-cycle": "error",
+    "import/no-duplicates": "error"
+  }
+}

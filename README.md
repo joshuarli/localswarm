@@ -64,6 +64,22 @@ server's own request ceiling. The benchmark reports both logical concurrency
 and active peak; the reported maximum is an empirical session-workload result,
 not a general server capacity guarantee.
 
+### Quality gates
+
+Formatting and linting are pinned in `deno.json`, with project rules in
+`.oxfmtrc.json` and `.oxlintrc.json`. Run the complete local gate with:
+
+```bash
+deno task format:check
+deno task lint
+deno task check
+deno task test
+```
+
+`deno check` remains the authoritative TypeScript/Deno type check; Oxlint
+enforces the strict correctness, performance, suspicious-code, import, and
+TypeScript rules that are compatible with the Deno runtime.
+
 ### oMLX and Laguna XS 2.1
 
 oMLX serves the MLX checkpoint natively through its continuous-batching

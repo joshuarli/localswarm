@@ -140,7 +140,7 @@ function parseOptions(args: string[]): BenchmarkOptions {
   const levels = (getValue("levels") ?? "1,2,4,6,8")
     .split(",")
     .map((value) => parsePositiveInteger(value, "levels"));
-  const uniqueLevels = [...new Set(levels)].sort((a, b) => a - b);
+  const uniqueLevels = [...new Set(levels)].toSorted((a, b) => a - b);
   const workload = getValue("workload") ?? "programming";
   if (workload !== "programming" && workload !== "ready") {
     throw new Error(`--workload must be programming or ready`);
@@ -252,14 +252,21 @@ async function runControllerVerification(
 async function verifyProgrammingWorkspace(
   workspace: string,
 ): Promise<string | undefined> {
-  for (const file of ["intervals.py", "test_intervals.py"]) {
-    try {
-      if (!(await Deno.stat(join(workspace, file))).isFile) {
-        return `${file} is not a file`;
+  const fileFailures = await Promise.all(
+    ["intervals.py", "test_intervals.py"].map(async (file) => {
+      try {
+        if (!(await Deno.stat(join(workspace, file))).isFile) {
+          return `${file} is not a file`;
+        }
+      } catch (error) {
+        return formatError(error);
       }
-    } catch (error) {
-      return formatError(error);
-    }
+      return undefined;
+    }),
+  );
+  const fileFailure = fileFailures.find((failure) => failure !== undefined);
+  if (fileFailure) {
+    return fileFailure;
   }
   const modelTests = await runPythonTest(workspace, "test_intervals.py");
   if (modelTests) return `model tests: ${modelTests}`;
@@ -290,8 +297,8 @@ async function runSession(
     await actor.session.prompt(task, {
       expandPromptTemplates: false,
     });
-    const lastAssistant = [...actor.session.messages]
-      .reverse()
+    const lastAssistant = actor.session.messages
+      .toReversed()
       .find((message) => message.role === "assistant") as
         | { stopReason?: string; errorMessage?: string }
         | undefined;
@@ -419,8 +426,8 @@ async function runWave(
   const outcomes = await Promise.all(
     actors.map(async (actor, index) => {
       if (index > 0 && staggerMs > 0) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, index * staggerMs)
+        await new Promise((wake) =>
+          setTimeout(wake, index * staggerMs)
         );
       }
       const release = await admission.acquire();
@@ -437,17 +444,19 @@ async function runWave(
     }),
   );
   if (workload === "programming") {
-    for (const actor of actors) {
-      const outcome = outcomes.find((candidate) =>
-        candidate.id === actor.config.id
-      );
-      if (!outcome || outcome.status === "failure") continue;
-      const failure = await verifyProgrammingWorkspace(actor.config.workspace);
-      if (failure) {
-        outcome.status = "failure";
-        outcome.error = `verification: ${failure}`;
-      }
-    }
+    await Promise.all(
+      actors.map(async (actor) => {
+        const outcome = outcomes.find((candidate) =>
+          candidate.id === actor.config.id
+        );
+        if (!outcome || outcome.status === "failure") return;
+        const failure = await verifyProgrammingWorkspace(actor.config.workspace);
+        if (failure) {
+          outcome.status = "failure";
+          outcome.error = `verification: ${failure}`;
+        }
+      }),
+    );
   }
   return {
     concurrency,
@@ -462,7 +471,7 @@ async function runWave(
 
 function percentile(values: number[], fraction: number): number {
   if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
+  const sorted = values.toSorted((a, b) => a - b);
   return sorted[
     Math.min(sorted.length - 1, Math.ceil(sorted.length * fraction) - 1)
   ];
@@ -542,6 +551,9 @@ async function main(): Promise<void> {
     for (const concurrency of options.levels) {
       for (let repeat = 1; repeat <= options.repeats; repeat += 1) {
         const waveRoot = join(runRoot, `c${concurrency}-r${repeat}`);
+        // Levels and repeats are deliberately sequential: stop-on-failure and
+        // admission measurements depend on the prior wave settling.
+        // oxlint-disable-next-line no-await-in-loop
         const result = await runWave(
           waveRoot,
           concurrency,
