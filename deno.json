@@ -1,0 +1,11 @@
+{
+  "imports": {
+    "@earendil-works/pi-ai": "npm:@earendil-works/pi-ai@0.84.1",
+    "@earendil-works/pi-coding-agent": "npm:@earendil-works/pi-coding-agent@0.84.1",
+    "typebox": "npm:typebox@1.3.7"
+  },
+  "tasks": {
+    "poc": "deno run --allow-read --allow-write=. --allow-net=127.0.0.1 --allow-run=python3 --allow-env --allow-sys=homedir src/main.ts",
+    "check": "deno check src/main.ts src/actor.ts src/provider.ts"
+  }
+}
