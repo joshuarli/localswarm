@@ -65,6 +65,30 @@ for a deterministic session-overhead control, `--repeats=2` for repeated runs,
 or `--levels=12,14,16` to probe the boundary. The reported maximum is an
 empirical session-workload result, not a vLLM capacity guarantee.
 
+## Current observed ceiling
+
+On the Apple M1 Max with 64 GB RAM, using vLLM-Metal, `Qwen/Qwen3-1.7B`, a
+32,768-token context, high thinking, and the Hermes tool parser, the interval
+merging programming workload produced:
+
+| Concurrent Pi sessions | Result                                                |
+| ---------------------: | ----------------------------------------------------- |
+|                      1 | Pass, 145s                                            |
+|                      2 | Pass, 155s                                            |
+|                      3 | Fail: model-generated syntax/indentation errors, 274s |
+|                      4 | Fail: syntax errors and timeouts at 300s              |
+
+The current practical ceiling is therefore **2 simultaneous full coding
+sessions** under the benchmark's 300-second deadline. This is a model and
+high-thinking reliability ceiling, not evidence that the machine ran out of RAM:
+the failed sessions were still generating or produced invalid Python.
+
+The deterministic `READY` control passed through 32 concurrent sessions, showing
+that the server can handle at least 32 short Pi sessions when there is little
+tool work. vLLM reported 404,640 KV-cache tokens, or a theoretical 12.35
+concurrent requests at the full 32,768-token length; real requests are usually
+much shorter, so that figure is not a direct session limit.
+
 ## Expected result
 
 Actor A creates and tests `workspaces/actor-a/fib.py`; actor B creates and tests

@@ -22,7 +22,7 @@ const programmingTask =
 
 Implement intervals.py with a merge_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]] function. Treat each interval as inclusive. Sort the input by start, merge overlapping or adjacent intervals, return a new list, and raise ValueError when any interval has start greater than end. Do not mutate the input and use only Python's standard library.
 
-Create test_intervals.py using only Python's standard library. Test unsorted intervals, overlapping intervals, adjacent intervals, negative values, input immutability, and invalid intervals.
+Create test_intervals.py using only Python's standard library. Import the function with "from intervals import merge_intervals". Test unsorted intervals, overlapping intervals, adjacent intervals, negative values, input immutability, and invalid intervals. Do not use pytest or any third-party package.
 
 IMPORTANT: use one tool call at a time. First write intervals.py and wait for the successful result. Then write test_intervals.py and wait for the successful result. Only then run test_intervals.py with the provided run_python_test tool. Fix any failures and stop only after the test passes.`;
 
