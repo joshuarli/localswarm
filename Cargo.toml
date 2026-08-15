@@ -1,0 +1,22 @@
+[package]
+name = "localswarm"
+version = "0.1.0"
+edition = "2021"
+description = "Concurrent Pi agents backed by oMLX and Laguna XS 2.1"
+license = "MIT"
+
+# This application is intentionally outside the pi-agent-core-rs workspace. The
+# dependency path remains explicit, while the repository-level rust-toolchain.toml
+# pins the compiler used to build both crates.
+[workspace]
+
+[dependencies]
+pi-agent-core = { path = "../pi-agent-core-rs/crates/pi-agent-core", features = ["provider-local"] }
+smol = "=2.0.2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
