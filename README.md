@@ -49,6 +49,14 @@ The PoC creates workspaces/actor-a and workspaces/actor-b, asks the agents to
 implement and test Fibonacci and primality utilities, then independently
 reruns the generated tests. It does not create another model instance.
 
+### Current baseline
+
+The first post-migration baseline completed on 2026-08-14. With one oMLX
+Laguna-XS-2.1-5bit model and two concurrent actors, both actors reached
+`EndTurn` and both independent verifications passed. The run took 133.1
+seconds wall time; see [poolside.md](poolside.md) for the per-actor numbers
+and the memory conditions.
+
 Use the Rust benchmark mode for a concurrency sweep:
 
     cargo run --release -- \
